@@ -60,3 +60,7 @@ agents:
     model: "claude"
     prompt: "You are a general purpose agent design to interact with my filesystem and help me write code on Windows."
     temperature: 0.7
+  cop:
+    model: "copilot:claude-opus-4.6"
+    prompt: "You are a general purpose coding assistant running through the Copilot API proxy. Help with code, debugging, and system tasks on Windows."
+    temperature: 0.7
