@@ -1,66 +1,48 @@
 # see https://github.com/sigoden/aichat/blob/main/config.example.yaml
+# All traffic routes through copilot-daemon (localhost:4141)
+# Install: scoop bucket add copilot-daemon https://github.com/jack-work/scoop-copilot-daemon
+#          scoop install copilot-daemon && copilot-daemon install
 
-model: claude
+model: copilot:claude-opus-4.6
 clients:
-  - type: claude
-    api_key: <YOUR_ANTHROPIC_API_KEY>
-
   - type: openai-compatible
     name: copilot
     api_base: http://localhost:4141
     models:
-      # Azure OpenAI Models
-      - name: gpt-4.1
-      - name: gpt-5-mini
-      - name: gpt-5
-      - name: gpt-3.5-turbo
-      - name: gpt-3.5-turbo-0613
-      - name: gpt-4o-mini
-      - name: gpt-4o-mini-2024-07-18
-      - name: gpt-4
-      - name: gpt-4-0613
-      - name: gpt-4-0125-preview
-      - name: gpt-4o
-      - name: gpt-4o-2024-11-20
-      - name: gpt-4o-2024-05-13
-      - name: gpt-4-o-preview
-      - name: gpt-4o-2024-08-06
-      - name: gpt-41-copilot
-      - name: gpt-4.1-2025-04-14
-      - name: oswe-agent-b
+      # Anthropic Models (via Copilot)
+      - name: claude-opus-4.6
+      - name: claude-sonnet-4.5
+      - name: claude-sonnet-4
+      - name: claude-opus-4.5
+      - name: claude-opus-41
+      - name: claude-haiku-4.5
 
       # OpenAI Models
+      - name: gpt-4.1
+      - name: gpt-5
+      - name: gpt-5-mini
       - name: gpt-5.1
       - name: gpt-5.1-codex
       - name: gpt-5.1-codex-mini
       - name: gpt-5-codex
+      - name: gpt-4o
+      - name: gpt-4o-mini
+      - name: gpt-4
+      - name: gpt-4-o-preview
+      - name: gpt-3.5-turbo
+
+      # Google Models
+      - name: gemini-3-pro-preview
+      - name: gemini-2.5-pro
 
       # Embedding Models
       - name: text-embedding-ada-002
         type: embedding
       - name: text-embedding-3-small
         type: embedding
-      - name: text-embedding-3-small-inference
-        type: embedding
-
-      # Anthropic Models
-      - name: claude-sonnet-4
-      - name: claude-sonnet-4.5
-      - name: claude-opus-4.6
-      - name: claude-opus-4.5
-      - name: claude-opus-41
-      - name: claude-haiku-4.5
-
-      # Google Models
-      - name: gemini-3-pro-preview
-      - name: gemini-2.5-pro
 
 agents:
   bob:
-    model: "claude"
-    prompt: "You are a general purpose agent design to interact with my filesystem and help me write code on Windows."
-    temperature: 0.7
-  cop:
     model: "copilot:claude-opus-4.6"
-    prompt: "You are a general purpose coding assistant running through the Copilot API proxy. Help with code, debugging, and system tasks on Windows."
+    prompt: "You are a general purpose agent designed to interact with my filesystem and help me write code on Windows."
     temperature: 0.7
