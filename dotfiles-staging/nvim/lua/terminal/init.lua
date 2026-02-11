@@ -122,7 +122,6 @@ function M.setup(opts)
       force = true
     })
     vim.cmd('cabbrev terminal Terminal')
-    vim.cmd('cabbrev term Terminal')
   end
 
   -- Expose for backward compatibility
