@@ -76,6 +76,10 @@ $psDir = Split-Path $PROFILE -Parent
 Copy-Config (Join-Path $staging "powershell\Microsoft.PowerShell_profile.ps1") (Join-Path $psDir "Microsoft.PowerShell_profile.ps1")
 Copy-Config (Join-Path $staging "powershell\prof.ps1") (Join-Path $psDir "prof.ps1")
 
+# Local profile (bypasses OneDrive, sourced by Windows Terminal via -NoProfile)
+Write-Host "`n[Local Profile]" -ForegroundColor Magenta
+Copy-Config (Join-Path $RepoRoot ".local\powershell\profile.ps1") "$HOME\.local\powershell\profile.ps1"
+
 # Claude Code
 Write-Host "`n[Claude Code]" -ForegroundColor Magenta
 Copy-ConfigDir (Join-Path $RepoRoot ".claude") "$HOME\.claude"
