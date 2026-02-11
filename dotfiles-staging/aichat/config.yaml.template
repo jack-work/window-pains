@@ -1,0 +1,62 @@
+# see https://github.com/sigoden/aichat/blob/main/config.example.yaml
+
+model: claude
+clients:
+  - type: claude
+    api_key: <YOUR_ANTHROPIC_API_KEY>
+
+  - type: openai-compatible
+    name: copilot
+    api_base: http://localhost:4141
+    models:
+      # Azure OpenAI Models
+      - name: gpt-4.1
+      - name: gpt-5-mini
+      - name: gpt-5
+      - name: gpt-3.5-turbo
+      - name: gpt-3.5-turbo-0613
+      - name: gpt-4o-mini
+      - name: gpt-4o-mini-2024-07-18
+      - name: gpt-4
+      - name: gpt-4-0613
+      - name: gpt-4-0125-preview
+      - name: gpt-4o
+      - name: gpt-4o-2024-11-20
+      - name: gpt-4o-2024-05-13
+      - name: gpt-4-o-preview
+      - name: gpt-4o-2024-08-06
+      - name: gpt-41-copilot
+      - name: gpt-4.1-2025-04-14
+      - name: oswe-agent-b
+
+      # OpenAI Models
+      - name: gpt-5.1
+      - name: gpt-5.1-codex
+      - name: gpt-5.1-codex-mini
+      - name: gpt-5-codex
+
+      # Embedding Models
+      - name: text-embedding-ada-002
+        type: embedding
+      - name: text-embedding-3-small
+        type: embedding
+      - name: text-embedding-3-small-inference
+        type: embedding
+
+      # Anthropic Models
+      - name: claude-sonnet-4
+      - name: claude-sonnet-4.5
+      - name: claude-opus-4.6
+      - name: claude-opus-4.5
+      - name: claude-opus-41
+      - name: claude-haiku-4.5
+
+      # Google Models
+      - name: gemini-3-pro-preview
+      - name: gemini-2.5-pro
+
+agents:
+  bob:
+    model: "claude"
+    prompt: "You are a general purpose agent design to interact with my filesystem and help me write code on Windows."
+    temperature: 0.7

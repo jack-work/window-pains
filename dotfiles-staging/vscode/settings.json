@@ -1,0 +1,32 @@
+{
+    "workbench.colorTheme": "Kanagawa",
+    "roo-cline.allowedCommands": [
+        "git log",
+        "git diff",
+        "git show",
+        "npm test",
+        "npm install",
+        "tsc",
+        "dotnet build",
+        "dotnet",
+        "powershell -ExecutionPolicy Bypass -File \".\\Test-FileSystemUpload.ps1\"",
+        "powershell",
+        "cp",
+        "mv",
+        "Move-Item",
+        "Remove-Item",
+        "Get-ChildItem",
+        "ForEach-Object",
+        "Set-Content",
+        "git",
+        "rg",
+        "dotnet-script",
+        "fzf",
+        "ls",
+        "cat",
+        "grep",
+        "*"
+    ],
+    "github.copilot.nextEditSuggestions.enabled": true,
+    "roo-cline.deniedCommands": []
+}

@@ -1,0 +1,23 @@
+[user]
+	name = "Jack Kelliher "
+	email = jokellih@microsoft.com
+[credential "azrepos:org/msazure"]
+	username = jokellih@microsoft.com
+	azureAuthority = https://login.microsoftonline.com/72f988bf-86f1-41af-91ab-2d7cd011db47
+[credential "helperselector"]
+	selected = manager
+[credential "azrepos:org/dynamicscrm"]
+	username = jokellih@microsoft.com
+	azureAuthority = https://login.microsoftonline.com/72f988bf-86f1-41af-91ab-2d7cd011db47
+[code]
+	autocrlf = input
+[core]
+	autocrlf = false
+	longpaths = true
+[credential "azrepos:org/office"]
+	username = jokellih@microsoft.com
+[alias]
+	addfix = !git diff --no-color > /tmp/fix.diff && git apply --index --whitespace=fix /tmp/fix.diff && rm -f /tmp/fix.diff
+	fixall = "!f() { \\\n  if git diff --cached --quiet; then \\\n    echo \"No staged changes, staging and fixing all unstaged changes...\"; \\\n    git diff --no-color > /tmp/fix.diff && \\\n    git apply --index --whitespace=fix /tmp/fix.diff && \\\n    rm -f /tmp/fix.diff; \\\n  else \\\n    echo \"Fixing staged changes...\"; \\\n    git diff --cached --no-color > /tmp/fix.diff && \\\n    git apply --index -R /tmp/fix.diff && \\\n    git apply --index --whitespace=fix /tmp/fix.diff && \\\n    rm -f /tmp/fix.diff; \\\n    if ! git diff --quiet; then \\\n      echo \"Also staging and fixing remaining unstaged changes...\"; \\\n      git diff --no-color > /tmp/fix2.diff && \\\n      git apply --index --whitespace=fix /tmp/fix2.diff && \\\n      rm -f /tmp/fix2.diff; \\\n    fi; \\\n  fi; \\\n}; f"
+[credential "https://microsoft.ghe.com"]
+	provider = github
