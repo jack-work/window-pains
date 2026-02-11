@@ -8,6 +8,9 @@ if ($env:PSModulePath -notlike "*$LocalModulesPath*") {
     $env:PSModulePath = "$LocalModulesPath;$env:PSModulePath"
 }
 
+# Bash/emacs keybindings: Ctrl+A/E/F/B/K/U/W/Y etc.
+Set-PSReadLineOption -EditMode Emacs
+
 # Prompt: directory + git branch (zero external dependencies)
 # Emits OSC 7 so neovim terminal buffers can track cwd
 function prompt {
