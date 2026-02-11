@@ -9,11 +9,15 @@ if ($env:PSModulePath -notlike "*$LocalModulesPath*") {
 }
 
 # Prompt: directory + git branch (zero external dependencies)
+# Emits OSC 7 so neovim terminal buffers can track cwd
 function prompt {
-    $path = $executionContext.SessionState.Path.CurrentLocation.Path -replace [regex]::Escape($HOME), '~'
+    $loc = $executionContext.SessionState.Path.CurrentLocation
+    $path = $loc.Path -replace [regex]::Escape($HOME), '~'
     $branch = git rev-parse --abbrev-ref HEAD 2>$null
     $branchPart = if ($branch) { " $([char]0xe0a0) $branch" } else { '' }
-    "$path$branchPart`n> "
+    # OSC 7: tell terminal emulator (neovim) our cwd
+    $osc7Path = $loc.ProviderPath -replace '\\', '/'
+    "$([char]0x1b)]7;file://${env:COMPUTERNAME}/${osc7Path}$([char]0x1b)\$path$branchPart`n> "
 }
 
 # REMOVED: Get-AppxPackage runs every startup (~800ms waste)

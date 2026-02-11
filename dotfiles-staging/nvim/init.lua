@@ -187,6 +187,21 @@ vim.api.nvim_create_autocmd("TermOpen", {
   end,
 })
 
+-- OSC 7: capture terminal cwd reported by shell prompt
+-- Shell sends: ESC]7;file://hostname/path ESC\
+-- Stored in vim.b.osc7_dir for lualine to read
+vim.api.nvim_create_autocmd('TermRequest', {
+  callback = function(args)
+    local payload = args.data and args.data.sequence or ''
+    local dir = payload:match('^\027%]7;file://[^/]*(/.+)')
+    if dir then
+      -- On Windows, convert /C:/path to C:/path
+      dir = dir:gsub('^/(%a:)', '%1')
+      vim.b[args.buf].osc7_dir = dir
+    end
+  end,
+})
+
 vim.keymap.set({ "n", "v" }, "<leader>m", "<C-w>|<C-w>_")
 vim.keymap.set("i", "<C-S-m>", "<esc><C-w>|<C-w>_i")
 

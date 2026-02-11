@@ -29,12 +29,27 @@ return {
           lualine_c = {
             {
               function()
-                local cwd = vim.fn.getcwd()
-                local home = vim.env.USERPROFILE or vim.env.HOME or ''
-                if home ~= '' and cwd:sub(1, #home) == home then
-                  cwd = '~' .. cwd:sub(#home + 1)
+                -- In terminal buffers, use OSC 7 reported cwd if available
+                local cwd
+                if vim.bo.buftype == 'terminal' then
+                  cwd = vim.b.osc7_dir or vim.fn.getcwd()
+                else
+                  cwd = vim.fn.getcwd()
                 end
-                return cwd:gsub('\\', '/')
+                local home = vim.env.USERPROFILE or vim.env.HOME or ''
+                if home ~= '' then
+                  -- Normalize separators for comparison
+                  local cwd_norm = cwd:gsub('\\', '/')
+                  local home_norm = home:gsub('\\', '/')
+                  if cwd_norm:sub(1, #home_norm) == home_norm then
+                    cwd = '~' .. cwd_norm:sub(#home_norm + 1)
+                  else
+                    cwd = cwd_norm
+                  end
+                else
+                  cwd = cwd:gsub('\\', '/')
+                end
+                return cwd
               end,
               icon = '',
               color = { fg = '#7aa2f7' },
