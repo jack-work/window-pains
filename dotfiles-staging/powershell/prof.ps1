@@ -8,8 +8,13 @@ if ($env:PSModulePath -notlike "*$LocalModulesPath*") {
     $env:PSModulePath = "$LocalModulesPath;$env:PSModulePath"
 }
 
-# oh-my-posh prompt (required at startup for prompt to work)
-oh-my-posh init pwsh --config ~/jandedobbeleer.omp.json | Invoke-Expression
+# Prompt: directory + git branch (zero external dependencies)
+function prompt {
+    $path = $executionContext.SessionState.Path.CurrentLocation.Path -replace [regex]::Escape($HOME), '~'
+    $branch = git rev-parse --abbrev-ref HEAD 2>$null
+    $branchPart = if ($branch) { " $([char]0xe0a0) $branch" } else { '' }
+    "$path$branchPart`n> "
+}
 
 # REMOVED: Get-AppxPackage runs every startup (~800ms waste)
 # Run this ONCE manually if M365Companions bothers you:

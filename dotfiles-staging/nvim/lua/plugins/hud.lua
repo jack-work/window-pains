@@ -26,15 +26,29 @@ return {
         sections = {
           lualine_a = { 'mode' },
           lualine_b = { 'branch', 'diff', 'diagnostics' },
-          lualine_c = { 'filename' },
-          lualine_x = { 'encoding', 'fileformat', 'filetype' },
+          lualine_c = {
+            {
+              function()
+                local cwd = vim.fn.getcwd()
+                local home = vim.env.USERPROFILE or vim.env.HOME or ''
+                if home ~= '' and cwd:sub(1, #home) == home then
+                  cwd = '~' .. cwd:sub(#home + 1)
+                end
+                return cwd:gsub('\\', '/')
+              end,
+              icon = '',
+              color = { fg = '#7aa2f7' },
+            },
+            { 'filename', path = 1 },
+          },
+          lualine_x = { 'filetype' },
           lualine_y = { 'progress' },
           lualine_z = { 'location' }
         },
         inactive_sections = {
           lualine_a = {},
           lualine_b = {},
-          lualine_c = { 'filename' },
+          lualine_c = { { 'filename', path = 1 } },
           lualine_x = { 'location' },
           lualine_y = {},
           lualine_z = {}
