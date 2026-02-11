@@ -85,6 +85,8 @@ scoop install lavawm zebar
 
 ```powershell
 scoop install aichat
+scoop bucket add copilot-daemon https://github.com/jack-work/scoop-copilot-daemon
+scoop install copilot-daemon
 ```
 
 ### Editors & apps
@@ -131,12 +133,14 @@ pwsh -File $HOME\install.ps1
 ### Post-dotfiles setup
 
 ```powershell
-# aichat: add your API key
+# aichat config (uses copilot-daemon, no API key needed)
 Copy-Item "$HOME\dotfiles-staging\aichat\config.yaml.template" "$env:APPDATA\aichat\config.yaml"
-# Then edit config.yaml and add your Anthropic API key
 
-# Copilot API proxy (if using GitHub Copilot)
+# Authenticate with GitHub Copilot
 npx copilot-api@latest auth
+
+# Start copilot-daemon (registers as startup task)
+copilot-daemon install
 ```
 
 ---
