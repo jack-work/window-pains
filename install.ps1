@@ -36,6 +36,14 @@ function Copy-ConfigDir {
     }
 }
 
+function Set-RegistryValue {
+    param([string]$Path, [string]$Name, $Value, [string]$Type = 'DWord')
+    if (-not (Test-Path $Path)) {
+        New-Item -Path $Path -Force | Out-Null
+    }
+    Set-ItemProperty -Path $Path -Name $Name -Value $Value -Type $Type -Force
+}
+
 $staging = Join-Path $RepoRoot "dotfiles-staging"
 
 Write-Host "`n=== window-pains installer ===" -ForegroundColor Cyan
@@ -52,19 +60,97 @@ if (Test-Path $scoopFile) {
         Invoke-RestMethod get.scoop.sh | Invoke-Expression
         scoop import $scoopFile
     }
-    # Ensure scoop shims is in the persisted user PATH
-    $scoopShims = Join-Path $HOME "scoop\shims"
-    $userPath = [Environment]::GetEnvironmentVariable('PATH', 'User')
-    if ($userPath -notmatch 'scoop\\shims') {
-        [Environment]::SetEnvironmentVariable('PATH', "$scoopShims;$userPath", 'User')
-        $env:PATH = "$scoopShims;$env:PATH"
-        Write-Host "  Added $scoopShims to persisted user PATH" -ForegroundColor Green
-    } else {
-        Write-Host "  scoop\shims already in PATH" -ForegroundColor Yellow
-    }
 } else {
     Write-Host "  WARN: scoopfile.json not found at $scoopFile" -ForegroundColor Red
 }
+
+# ── PATH ────────────────────────────────────────────────────────────────
+Write-Host "`n[PATH]" -ForegroundColor Magenta
+$requiredPaths = @(
+    (Join-Path $HOME "scoop\shims"),
+    (Join-Path $HOME ".local\bin"),
+    (Join-Path $env:LOCALAPPDATA "mise\shims")
+)
+$userPath = [Environment]::GetEnvironmentVariable('PATH', 'User')
+$changed = $false
+foreach ($p in $requiredPaths) {
+    $escaped = [regex]::Escape($p)
+    if ($userPath -notmatch $escaped) {
+        $userPath = "$p;$userPath"
+        $changed = $true
+        Write-Host "  Added $p" -ForegroundColor Green
+    } else {
+        Write-Host "  OK: $p" -ForegroundColor Yellow
+    }
+}
+if ($changed) {
+    [Environment]::SetEnvironmentVariable('PATH', $userPath, 'User')
+    $env:PATH = $userPath + ';' + [Environment]::GetEnvironmentVariable('PATH', 'Machine')
+    Write-Host "  Persisted user PATH updated" -ForegroundColor Green
+}
+
+# ── Windows registry tweaks ─────────────────────────────────────────────
+Write-Host "`n[Windows Tweaks]" -ForegroundColor Magenta
+$cdm = "HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"
+$adv = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
+
+# Taskbar: auto-hide (show on hover only)
+Write-Host "  Taskbar auto-hide ..." -ForegroundColor Green
+$sr3 = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StuckRects3"
+if (Test-Path $sr3) {
+    $settings = (Get-ItemProperty -Path $sr3 -Name Settings).Settings
+    if ($settings -and $settings[8] -ne 3) {
+        $settings[8] = 3
+        Set-ItemProperty -Path $sr3 -Name Settings -Value $settings -Type Binary -Force
+    }
+}
+
+# Taskbar: disable Widgets
+Write-Host "  Disable Widgets ..." -ForegroundColor Green
+Set-RegistryValue $adv "TaskbarDa" 0
+
+# Taskbar: disable Copilot button
+Write-Host "  Disable Copilot button ..." -ForegroundColor Green
+Set-RegistryValue "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" "ShowCopilotButton" 0
+Set-RegistryValue "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot" "TurnOffWindowsCopilot" 1
+
+# Disable Bing search in Start Menu
+Write-Host "  Disable Bing in Start ..." -ForegroundColor Green
+Set-RegistryValue "HKCU:\Software\Microsoft\Windows\CurrentVersion\Search" "BingSearchEnabled" 0
+Set-RegistryValue "HKCU:\Software\Policies\Microsoft\Windows\Explorer" "DisableSearchBoxSuggestions" 1
+
+# Start Menu: disable recommendations, tips, suggestions
+Write-Host "  Disable Start recommendations ..." -ForegroundColor Green
+Set-RegistryValue $adv "Start_TrackDocs" 0
+Set-RegistryValue $adv "Start_IrisRecommendations" 0
+Set-RegistryValue "HKCU:\Software\Policies\Microsoft\Windows\Explorer" "HideRecommendedSection" 1
+
+# ContentDeliveryManager: disable all ads / suggestions / tips
+Write-Host "  Disable ads, tips, suggestions ..." -ForegroundColor Green
+Set-RegistryValue $cdm "SubscribedContent-338387Enabled" 0   # lock screen tips
+Set-RegistryValue $cdm "SubscribedContent-338388Enabled" 0   # Start suggestions
+Set-RegistryValue $cdm "SubscribedContent-338389Enabled" 0   # tips & suggestions
+Set-RegistryValue $cdm "SubscribedContent-338393Enabled" 0   # feedback notifications
+Set-RegistryValue $cdm "SubscribedContent-353698Enabled" 0   # timeline suggestions
+Set-RegistryValue $cdm "RotatingLockScreenEnabled" 0
+Set-RegistryValue $cdm "RotatingLockScreenOverlayEnabled" 0
+Set-RegistryValue $cdm "SystemPaneSuggestionsEnabled" 0
+
+# Disable feedback notifications (system-wide)
+Write-Host "  Disable feedback notifications ..." -ForegroundColor Green
+Set-RegistryValue "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection" "DoNotShowFeedbackNotifications" 1
+
+# Disable tips & consumer features (system-wide)
+Write-Host "  Disable consumer features ..." -ForegroundColor Green
+Set-RegistryValue "HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent" "DisableSoftLanding" 1
+Set-RegistryValue "HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent" "DisableWindowsConsumerFeatures" 1
+
+# Restart Explorer to apply taskbar changes
+Write-Host "  Restarting Explorer ..." -ForegroundColor Green
+Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 2
+
+# ── Config files ─────────────────────────────────────────────────────────
 
 # Neovim
 Write-Host "`n[Neovim]" -ForegroundColor Magenta
@@ -96,7 +182,7 @@ if ($wtPath) {
     Write-Host "  SKIP: Windows Terminal not installed" -ForegroundColor Yellow
 }
 
-# PowerShell profile
+# PowerShell profile ($PROFILE redirects to local profile)
 Write-Host "`n[PowerShell]" -ForegroundColor Magenta
 $psDir = Split-Path $PROFILE -Parent
 Copy-Config (Join-Path $staging "powershell\Microsoft.PowerShell_profile.ps1") (Join-Path $psDir "Microsoft.PowerShell_profile.ps1")
