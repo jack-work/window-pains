@@ -40,6 +40,32 @@ $staging = Join-Path $RepoRoot "dotfiles-staging"
 
 Write-Host "`n=== window-pains installer ===" -ForegroundColor Cyan
 
+# ── Scoop packages ──────────────────────────────────────────────────────
+Write-Host "`n[Scoop]" -ForegroundColor Magenta
+$scoopFile = Join-Path $RepoRoot "scoopfile.json"
+if (Test-Path $scoopFile) {
+    if (Get-Command scoop -ErrorAction SilentlyContinue) {
+        Write-Host "  Importing scoop packages from scoopfile.json ..." -ForegroundColor Green
+        scoop import $scoopFile
+    } else {
+        Write-Host "  Scoop not found. Installing scoop first ..." -ForegroundColor Yellow
+        Invoke-RestMethod get.scoop.sh | Invoke-Expression
+        scoop import $scoopFile
+    }
+    # Ensure scoop shims is in the persisted user PATH
+    $scoopShims = Join-Path $HOME "scoop\shims"
+    $userPath = [Environment]::GetEnvironmentVariable('PATH', 'User')
+    if ($userPath -notmatch 'scoop\\shims') {
+        [Environment]::SetEnvironmentVariable('PATH', "$scoopShims;$userPath", 'User')
+        $env:PATH = "$scoopShims;$env:PATH"
+        Write-Host "  Added $scoopShims to persisted user PATH" -ForegroundColor Green
+    } else {
+        Write-Host "  scoop\shims already in PATH" -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "  WARN: scoopfile.json not found at $scoopFile" -ForegroundColor Red
+}
+
 # Neovim
 Write-Host "`n[Neovim]" -ForegroundColor Magenta
 Copy-ConfigDir (Join-Path $staging "nvim") "$env:LOCALAPPDATA\nvim"
@@ -94,7 +120,6 @@ Copy-Config (Join-Path $RepoRoot "lavalogo.ico") "$HOME\lavalogo.ico"
 
 Write-Host "`n=== Done! ===" -ForegroundColor Cyan
 Write-Host "Next steps:"
-Write-Host "  1. Install scoop packages (see README.md)"
-Write-Host "  2. Set up aichat API key"
-Write-Host "  3. Run 'lavawm start' to test the WM"
-Write-Host "  4. Open neovim - Mason will auto-install LSP servers"
+Write-Host "  1. Rename aichat config.yaml.template to config.yaml"
+Write-Host "  2. Run 'lavawm start' to test the WM"
+Write-Host "  3. Open neovim - Mason will auto-install LSP servers"

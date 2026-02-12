@@ -101,14 +101,42 @@ The service runs at: `https://forintracommuseonly.localhost:50772`
 
 ## Step 5: Get Authentication Token
 
-Use the token acquisition script in the orchard repo:
+### CRITICAL: Token acquisition rules
+
+1. **ALWAYS use `-Environment test`** (or omit it — `test` is the default). The underlying TokensUtil **only accepts `test` or `prod`**. Passing `local` or `dev` WILL fail.
+2. **A `test` token works everywhere**: local, dev, test, and preprod. There is no need for a separate "local" token.
+3. **Prod tokens CANNOT be acquired via this script** with `@microsoft.com` accounts. For prod, the user must copy a Bearer token manually from browser DevTools.
+4. **The script writes the token to ALL environments** in `http-client.private.env.json` automatically.
+
+### Running the script
 
 ```powershell
 cd "$ORCHARD_PATH/eng/http"
-.\Get-Token.ps1 -Environment local
+.\Get-Token.ps1
 ```
 
-This writes the token to `http-client.private.env.json`.
+That's it. No flags needed — it defaults to `-Environment test`.
+
+### If the script is run from a worktree
+
+The token file (`http-client.private.env.json`) is written relative to where the script lives. If you're working in a git worktree and the script lives in the main worktree, the token file will be written there — not in your current worktree. Either:
+- Copy the token file to your worktree's `eng/http/` directory after running the script, OR
+- Run the script from the worktree's own `eng/http/Get-Token.ps1` if available
+
+### Troubleshooting token acquisition
+
+**Do NOT give up on token acquisition.** The script is reliable. If it fails, it's almost certainly one of these:
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `Environment must be either 'test' or 'prod'` | You passed `-Environment local` or `-Environment dev` | Use `-Environment test` (or omit the flag entirely) |
+| `Failed to extract token from output` with same error | Same — invalid environment passed | Same fix: use `test` |
+| Browser auth window doesn't appear | Cached credentials may be stale | Try `-Username` with the user's email |
+| `Project path not found` | Script can't find TokensUtil | Pass `-ProjectPath` pointing to `src/Tools/TokensUtil` |
+| `Access denied` / auth errors | User lacks permissions to the Aurora test tenant | Ask the user to verify they have access to `capintegration01.onmicrosoft.com` tenant. They may need to request access. |
+| Token expired during testing | Tokens expire after ~1 hour | Re-run the script |
+
+**If none of the above apply**, ask the user what error they see and update this skill with the resolution.
 
 ## Step 6: Run Developer Agents
 
@@ -125,7 +153,7 @@ Since `CS_CLUSTERCATEGORY` defaults to `local`, the orchestrator automatically u
 
 Check the server logs - you should see requests to:
 ```
-https://forintracommuseonly.localhost:50772/api/harvest/createsession
+https://forintracommuseonly.localhost:50772/api/harvest/container-sessions
 ```
 
 ## Step 7: Test with HTTP Files
@@ -178,7 +206,7 @@ kill <PID>
 Run `init.cmd` from the orchard repo root (elevated prompt on Windows).
 
 ### 401 Unauthorized
-Token expired. Re-run `Get-Token.ps1` with `-Force` or delete `http-client.private.env.json` and re-acquire.
+Token expired. Re-run `Get-Token.ps1` (no flags needed — defaults to test).
 
 ### Requests going to remote Orchard
 Check that `CS_CLUSTERCATEGORY` is `local` (or unset, which defaults to `local`):
@@ -192,6 +220,6 @@ echo $CS_CLUSTERCATEGORY  # Should be empty or 'local'
 |------|-------|
 | Local Orchard URL | `https://forintracommuseonly.localhost:50772` |
 | Cluster Category | `local` (default) |
-| Token Script | `$ORCHARD_PATH/eng/http/Get-Token.ps1` |
+| Token Script | `$ORCHARD_PATH/eng/http/Get-Token.ps1` (always use `-Environment test` or omit) |
 | HTTP Tests | `$ORCHARD_PATH/eng/http/container-session/` |
-| Create Session Endpoint | `POST /api/harvest/createsession` |
+| Create Session Endpoint | `POST /api/harvest/container-sessions` |
