@@ -92,9 +92,38 @@ Copy-Config (Join-Path $RepoRoot ".gitconfig") "$HOME\.gitconfig"
 Write-Host "`n[LavaWM Icon]" -ForegroundColor Magenta
 Copy-Config (Join-Path $RepoRoot "lavalogo.ico") "$HOME\lavalogo.ico"
 
+# Edge Profile (browser policies via registry)
+Write-Host "`n[Edge Profile]" -ForegroundColor Magenta
+Copy-Config (Join-Path $staging "edge-profile\config.toml") "$HOME\.edge-profile\config.toml"
+
+$edgeProfileCrate = Join-Path $RepoRoot "edge-profile"
+if (Test-Path (Join-Path $edgeProfileCrate "Cargo.toml")) {
+    if (Get-Command cargo -ErrorAction SilentlyContinue) {
+        Write-Host "  Building edge-profile..." -ForegroundColor Gray
+        cargo install --path $edgeProfileCrate --quiet 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "  INSTALL: edge-profile.exe" -ForegroundColor Green
+            Write-Host "  Applying Edge policies..." -ForegroundColor Gray
+            edge-profile apply 2>&1 | ForEach-Object { Write-Host "  $_" -ForegroundColor Gray }
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "  APPLY: Edge policies written to HKCU" -ForegroundColor Green
+            } else {
+                Write-Host "  WARN: edge-profile apply failed" -ForegroundColor Red
+            }
+        } else {
+            Write-Host "  WARN: cargo install edge-profile failed" -ForegroundColor Red
+        }
+    } else {
+        Write-Host "  SKIP: cargo not found (install Rust toolchain first)" -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "  WARN: edge-profile crate not found at $edgeProfileCrate" -ForegroundColor Red
+}
+
 Write-Host "`n=== Done! ===" -ForegroundColor Cyan
 Write-Host "Next steps:"
 Write-Host "  1. Install scoop packages (see README.md)"
 Write-Host "  2. Set up aichat API key"
 Write-Host "  3. Run 'lavawm start' to test the WM"
 Write-Host "  4. Open neovim - Mason will auto-install LSP servers"
+Write-Host "  5. Restart Edge to pick up applied policies (check edge://policy)"

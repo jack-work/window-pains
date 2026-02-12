@@ -1,0 +1,21 @@
+[search]
+provider = "DuckDuckGo"
+search_url = "https://duckduckgo.com/?q={searchTerms}"
+suggest_url = "https://duckduckgo.com/ac/?q={searchTerms}&type=list"
+
+[extensions]
+vimium_c = "edge:aibcglbfblnogfjhbcmmpobjhnomhcdo"
+onepassword = "edge:aeblfdkhhhdcdjpifhhbdiojplfjncoa"
+ublock_origin = "edge:odfafepnkmbhccpbejgmiehpchacaeak"
+
+[browser]
+restore_on_startup = "previous_session"
+show_home_button = true
+favorites_bar = true
+hide_first_run = true
+
+[privacy]
+tracking_prevention = "strict"
+password_manager = false
+autofill_credit_card = false
+autofill_address = false
