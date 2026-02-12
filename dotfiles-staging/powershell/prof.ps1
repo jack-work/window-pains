@@ -1,3 +1,6 @@
+# mise: put shims first so mise-managed tools (bun, node, etc.) win over scoop/system
+$env:PATH = "$env:LOCALAPPDATA\mise\shims;$env:PATH"
+
 # PowerShell profile - OPTIMIZED FOR FAST STARTUP
 # Modules are stored locally at ~\.local\share\powershell\Modules
 # OneDrive\Documents\PowerShell\Modules is an NTFS junction pointing there (bypasses OneDrive sync)
