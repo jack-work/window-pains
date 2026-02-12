@@ -231,7 +231,7 @@ keybindings:
 
   # Change the focused window to be fullscreen.
   - commands: ['toggle-fullscreen']
-    bindings: ['alt+f']
+    bindings: ['alt+shift+f']
 
   # Minimize focused window.
   - commands: ['toggle-minimized']
@@ -267,7 +267,7 @@ keybindings:
 
   # Focus the workspace that last had focus.
   - commands: ['focus --recent-workspace']
-    bindings: ['alt+d']
+    bindings: ['alt+shift+d']
 
   # Change focus to a workspace defined in `workspaces` config.
   - commands: ['focus --workspace 1']
