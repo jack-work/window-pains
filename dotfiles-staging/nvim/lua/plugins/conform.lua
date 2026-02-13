@@ -24,9 +24,12 @@ return {
       markdown = { "prettier" },
       yaml = { "prettier" },
     },
-    format_on_save = {
-      timeout_ms = 1000,
-      lsp_fallback = true,
-    },
+    format_on_save = function(bufnr)
+      local ft = vim.bo[bufnr].filetype
+      if ft == "typescript" or ft == "typescriptreact" then
+        return false
+      end
+      return { timeout_ms = 1000, lsp_fallback = true }
+    end,
   },
 }
