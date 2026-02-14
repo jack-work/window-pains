@@ -76,6 +76,21 @@ if (Test-Path $scoopFile)
   Write-Host "  WARN: scoopfile.json not found at $scoopFile" -ForegroundColor Red
 }
 
+# ── PowerShell modules ─────────────────────────────────────────────────
+Write-Host "`n[PowerShell Modules]" -ForegroundColor Magenta
+$requiredModules = @('Merc', 'sup')
+foreach ($mod in $requiredModules)
+{
+  if (Get-Module -ListAvailable -Name $mod)
+  {
+    Write-Host "  OK: $mod" -ForegroundColor Yellow
+  } else
+  {
+    Write-Host "  Installing $mod from PSGallery ..." -ForegroundColor Green
+    Install-Module -Name $mod -Scope CurrentUser -Force -AllowClobber
+  }
+}
+
 # ── PATH ────────────────────────────────────────────────────────────────
 Write-Host "`n[PATH]" -ForegroundColor Magenta
 $requiredPaths = @(
