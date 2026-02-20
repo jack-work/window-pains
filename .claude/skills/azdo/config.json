@@ -1,0 +1,14 @@
+{
+  "organization": "msazure",
+  "project": "OneAgile",
+  "repository": "PowerApps-Orchard",
+  "defaultAreaPath": "OneAgile\\PowerApps\\Developer Agents\\Orchard",
+  "features": {
+    "backlog": {
+      "id": 36649440,
+      "description": "Jack's Backlog — catch-all for orphan items",
+      "added_at": "2026-02-20"
+    }
+  },
+  "defaultFeature": "backlog"
+}

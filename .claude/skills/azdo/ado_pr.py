@@ -1,457 +1,944 @@
-#!/usr/bin/env python3
-"""Azure DevOps PR helper script for Claude Code."""
+# /// script
+# requires-python = ">=3.10"
+# dependencies = [
+#   "httpx>=0.27",
+#   "click>=8.1",
+#   "pyyaml>=6.0",
+# ]
+# ///
+"""Azure DevOps PR helper CLI for Claude Code.
 
-import subprocess
+Usage:
+    uv run ado_pr.py [--config config.json] <command> [options]
+
+Dependencies are managed via PEP 723 inline metadata.
+Run with `uv run` — no manual install needed.
+"""
+
 import json
+import os
+import shutil
+import subprocess
 import sys
-import argparse
-from urllib.request import Request, urlopen
-from urllib.error import HTTPError
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from urllib.parse import quote
+
+import click
+import httpx
+import yaml
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
 
 ADO_RESOURCE = "499b84ac-1321-427f-aa17-267ca6975798"
+API_VERSION = "7.1"
 
-# Claude Code attribution prefix for all comments
-CLAUDE_CODE_SIGNATURE = "\n\n---\n*This comment was posted by [Claude Code](https://claude.ai/claude-code) on behalf of the PR author.*"
+CLAUDE_CODE_SIGNATURE = (
+    "\n\n---\n"
+    "*This comment was posted by [Claude Code](https://claude.ai/claude-code) "
+    "on behalf of the PR author.*"
+)
 
-def find_az_cli():
-    """Find the az CLI executable."""
-    import shutil
-    import os
+# ---------------------------------------------------------------------------
+# Token management
+# ---------------------------------------------------------------------------
 
-    # Try common locations
+_cached_token: str | None = None
+
+
+def _find_az_cli() -> str:
+    """Locate the az CLI executable."""
     candidates = [
         shutil.which("az"),
         r"C:\Program Files (x86)\Microsoft SDKs\Azure\CLI2\wbin\az.cmd",
         r"C:\Program Files\Microsoft SDKs\Azure\CLI2\wbin\az.cmd",
         os.path.expanduser("~\\scoop\\apps\\azure-cli\\current\\bin\\az.cmd"),
     ]
+    for c in candidates:
+        if c and os.path.exists(c):
+            return c
+    raise click.ClickException("az CLI not found. Please install Azure CLI.")
 
-    for candidate in candidates:
-        if candidate and os.path.exists(candidate):
-            return candidate
 
-    raise RuntimeError("az CLI not found. Please install Azure CLI.")
+def get_token() -> str:
+    """Get an Azure access token (cached for the process lifetime)."""
+    global _cached_token
+    if _cached_token is not None:
+        return _cached_token
 
-def get_token():
-    """Get Azure access token using az CLI."""
-    az_path = find_az_cli()
+    az = _find_az_cli()
     result = subprocess.run(
-        [az_path, "account", "get-access-token", "--resource", ADO_RESOURCE, "--query", "accessToken", "-o", "tsv"],
-        capture_output=True, text=True, shell=True
+        [az, "account", "get-access-token", "--resource", ADO_RESOURCE,
+         "--query", "accessToken", "-o", "tsv"],
+        capture_output=True, text=True,
     )
     if result.returncode != 0:
-        raise RuntimeError(f"Failed to get token: {result.stderr}")
-    return result.stdout.strip()
+        raise click.ClickException(f"Failed to get token: {result.stderr.strip()}")
+    _cached_token = result.stdout.strip()
+    return _cached_token
 
-def make_request(url, method="GET", data=None):
-    """Make authenticated request to ADO API."""
-    token = get_token()
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
-    req = Request(url, method=method, headers=headers)
-    if data:
-        req.data = json.dumps(data).encode('utf-8')
+
+# ---------------------------------------------------------------------------
+# HTTP client
+# ---------------------------------------------------------------------------
+
+def _client() -> httpx.Client:
+    """Build an authenticated httpx client."""
+    return httpx.Client(
+        headers={
+            "Authorization": f"Bearer {get_token()}",
+        },
+        timeout=30.0,
+    )
+
+
+def _retry(fn, *, retries: int = 3, backoff: float = 1.0):
+    """Retry a callable on transient connection errors."""
+    for attempt in range(retries):
+        try:
+            return fn()
+        except (httpx.ConnectError, httpx.ReadError) as e:
+            if attempt == retries - 1:
+                raise
+            time.sleep(backoff * (attempt + 1))
+
+
+def api_get(url: str) -> dict:
+    """Authenticated GET returning JSON."""
+    def _do():
+        with _client() as c:
+            r = c.get(url)
+            r.raise_for_status()
+            return r.json()
+    return _retry(_do)
+
+
+def api_post(url: str, payload: dict | list, *, content_type: str = "application/json") -> dict:
+    """Authenticated POST returning JSON."""
+    def _do():
+        with _client() as c:
+            r = c.post(url, json=payload, headers={"Content-Type": content_type})
+            r.raise_for_status()
+            return r.json()
+    return _retry(_do)
+
+
+def api_patch(url: str, payload: dict | list, *, content_type: str = "application/json") -> dict:
+    """Authenticated PATCH returning JSON."""
+    with _client() as c:
+        r = c.patch(url, json=payload, headers={"Content-Type": content_type})
+        r.raise_for_status()
+        return r.json()
+
+
+# ---------------------------------------------------------------------------
+# URL helpers
+# ---------------------------------------------------------------------------
+
+def ado_url(org: str, project: str, *parts: str, **params: str) -> str:
+    """Build an ADO REST API URL."""
+    params.setdefault("api-version", API_VERSION)
+    base = f"https://dev.azure.com/{org}/{project}/_apis/" + "/".join(parts)
+    qs = "&".join(f"{k}={v}" for k, v in params.items())
+    return f"{base}?{qs}"
+
+
+def org_url(org: str, *parts: str, **params: str) -> str:
+    """Build an ADO REST API URL at the org level (no project)."""
+    params.setdefault("api-version", API_VERSION)
+    base = f"https://dev.azure.com/{org}/_apis/" + "/".join(parts)
+    qs = "&".join(f"{k}={v}" for k, v in params.items())
+    return f"{base}?{qs}"
+
+
+# ---------------------------------------------------------------------------
+# Config loading
+# ---------------------------------------------------------------------------
+
+def load_config(config_path: str | None) -> dict:
+    """Load config.json from the given path, or from the script's directory."""
+    if config_path:
+        p = Path(config_path)
+    else:
+        p = Path(__file__).parent / "config.json"
+
+    if not p.exists():
+        raise click.ClickException(
+            f"Config not found at {p}. Copy config.template.json to config.json and fill in your values."
+        )
+
+    with open(p, encoding="utf-8") as f:
+        cfg = json.load(f)
+
+    # Stash the resolved path so write operations can save back
+    cfg["_config_path"] = str(p)
+
+    for key in ("organization", "project"):
+        val = cfg.get(key, "")
+        if not val or val.startswith("<"):
+            raise click.ClickException(
+                f"config.json: '{key}' is missing or set to a placeholder. Please set it."
+            )
+    return cfg
+
+
+# ---------------------------------------------------------------------------
+# Feature registry helpers
+# ---------------------------------------------------------------------------
+
+def _get_registry(cfg: dict) -> dict:
+    """Return the features map from config (handles backcompat with backlogFeatureId)."""
+    if "features" in cfg:
+        return dict(cfg["features"])
+    # Backward compat: synthesize from old flat field
+    old_id = cfg.get("backlogFeatureId")
+    if old_id:
+        return {
+            "backlog": {
+                "id": old_id,
+                "description": "Migrated from backlogFeatureId",
+                "added_at": "unknown",
+            }
+        }
+    return {}
+
+
+def _save_config(cfg: dict) -> None:
+    """Write config.json back, preserving non-internal keys."""
+    config_path = cfg.get("_config_path")
+    if not config_path:
+        raise click.ClickException("Config path not set — cannot save.")
+    out = {k: v for k, v in cfg.items() if not k.startswith("_")}
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(out, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+
+
+def _resolve_feature(cfg: dict, name_or_id: str) -> tuple[str, dict]:
+    """Look up a feature by name or by ADO ID. Returns (name, entry)."""
+    registry = _get_registry(cfg)
+    # Try by name first
+    if name_or_id in registry:
+        return name_or_id, registry[name_or_id]
+    # Try by integer ID
     try:
-        with urlopen(req) as response:
-            return json.loads(response.read().decode('utf-8'))
-    except HTTPError as e:
-        error_body = e.read().decode('utf-8') if e.fp else str(e)
-        raise RuntimeError(f"HTTP {e.code}: {error_body}")
+        lookup_id = int(name_or_id)
+    except ValueError:
+        raise click.ClickException(f"Feature '{name_or_id}' not found in registry.")
+    for name, entry in registry.items():
+        if entry.get("id") == lookup_id:
+            return name, entry
+    raise click.ClickException(f"Feature with ID {lookup_id} not found in registry.")
 
-def get_threads(org, project, repo, pr_id, active_only=True):
-    """Get PR comment threads."""
-    url = f"https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo}/pullrequests/{pr_id}/threads?api-version=7.1"
-    response = make_request(url)
-    threads = response.get("value", [])
 
+def _fetch_work_item(org: str, project: str, work_item_id: int) -> dict:
+    """Fetch a single work item with relations (data only, no printing)."""
+    url = ado_url(org, project, "wit", "workitems", str(work_item_id), **{"$expand": "relations"})
+    return api_get(url)
+
+
+# ---------------------------------------------------------------------------
+# PR operations
+# ---------------------------------------------------------------------------
+
+def get_threads(org: str, project: str, repo: str, pr_id: int, *, active_only: bool = True) -> list[dict]:
+    """Fetch PR comment threads."""
+    url = ado_url(org, project, "git", "repositories", repo, "pullrequests", str(pr_id), "threads")
+    threads = api_get(url).get("value", [])
     if active_only:
-        threads = [t for t in threads if t.get("status") not in ("fixed", "closed") and not t.get("isDeleted")]
-
+        threads = [
+            t for t in threads
+            if t.get("status") not in ("fixed", "closed") and not t.get("isDeleted")
+        ]
     return threads
 
-def list_comments(org, project, repo, pr_id):
-    """List active PR comments."""
+
+def list_comments(org: str, project: str, repo: str, pr_id: int) -> None:
+    """Print a table of active PR comment threads."""
     threads = get_threads(org, project, repo, pr_id, active_only=True)
 
-    results = []
-    for thread in threads:
-        human_comments = [c for c in thread.get("comments", [])
-                         if c.get("author", {}).get("displayName") != "Microsoft.VisualStudio.Services.TFS"
-                         and c.get("commentType") != "system"]
-        if human_comments:
-            ctx = thread.get("threadContext") or {}
-            results.append({
-                "thread_id": thread["id"],
-                "status": thread.get("status"),
+    rows: list[dict] = []
+    for t in threads:
+        human = [
+            c for c in t.get("comments", [])
+            if c.get("author", {}).get("displayName") != "Microsoft.VisualStudio.Services.TFS"
+            and c.get("commentType") != "system"
+        ]
+        if human:
+            ctx = t.get("threadContext") or {}
+            rows.append({
+                "thread_id": t["id"],
+                "status": t.get("status"),
                 "file_path": ctx.get("filePath"),
                 "line": (ctx.get("rightFileStart") or {}).get("line"),
-                "content": human_comments[0].get("content", "")[:150]
+                "content": human[0].get("content", "")[:150],
             })
 
-    # Print as table
-    print(f"{'Thread ID':<12} {'Status':<10} {'File':<50} {'Line':<6} Content")
-    print("-" * 120)
-    for r in sorted(results, key=lambda x: x.get("line") or 0):
-        file_path = (r["file_path"] or "")[:48]
-        content = r["content"].replace("\n", " ")[:50]
-        print(f"{r['thread_id']:<12} {r['status'] or '':<10} {file_path:<50} {r['line'] or '':<6} {content}")
+    click.echo(f"{'Thread ID':<12} {'Status':<10} {'File':<50} {'Line':<6} Content")
+    click.echo("-" * 120)
+    for r in sorted(rows, key=lambda x: x.get("line") or 0):
+        fp = (r["file_path"] or "")[:48]
+        body = r["content"].replace("\n", " ")[:50]
+        click.echo(f"{r['thread_id']:<12} {r['status'] or '':<10} {fp:<50} {r['line'] or '':<6} {body}")
 
-def show_thread(org, project, repo, pr_id, thread_id):
-    """Show all comments in a thread."""
-    threads = get_threads(org, project, repo, pr_id, active_only=False)
-    for thread in threads:
-        if thread["id"] == thread_id:
-            ctx = thread.get("threadContext") or {}
-            print(f"Thread {thread_id} (status: {thread.get('status', 'unknown')})")
-            print(f"File: {ctx.get('filePath', 'N/A')}")
-            print(f"Line: {(ctx.get('rightFileStart') or {}).get('line', 'N/A')}")
-            print("-" * 80)
-            for c in thread.get("comments", []):
+
+def show_thread(org: str, project: str, repo: str, pr_id: int, thread_id: int) -> None:
+    """Print all comments in a single thread."""
+    for t in get_threads(org, project, repo, pr_id, active_only=False):
+        if t["id"] == thread_id:
+            ctx = t.get("threadContext") or {}
+            click.echo(f"Thread {thread_id} (status: {t.get('status', 'unknown')})")
+            click.echo(f"File: {ctx.get('filePath', 'N/A')}")
+            click.echo(f"Line: {(ctx.get('rightFileStart') or {}).get('line', 'N/A')}")
+            click.echo("-" * 80)
+            for c in t.get("comments", []):
                 if not c.get("isDeleted"):
                     author = c.get("author", {}).get("displayName", "unknown")
-                    print(f"\n[{author}]:")
-                    print(c.get("content", ""))
+                    click.echo(f"\n[{author}]:")
+                    click.echo(c.get("content", ""))
             return
-    print(f"Thread {thread_id} not found")
+    click.echo(f"Thread {thread_id} not found")
 
-def reply_to_thread(org, project, repo, pr_id, thread_id, comment):
-    """Reply to a PR comment thread with Claude Code attribution."""
-    url = f"https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo}/pullrequests/{pr_id}/threads/{thread_id}/comments?api-version=7.1"
-    # Add Claude Code signature to all comments
-    comment_with_signature = comment + CLAUDE_CODE_SIGNATURE
-    data = {"content": comment_with_signature, "commentType": 1}
-    result = make_request(url, method="POST", data=data)
-    print(f"Replied to thread {thread_id}")
+
+def reply_to_thread(org: str, project: str, repo: str, pr_id: int, thread_id: int, comment: str) -> dict:
+    """Post a reply to a PR comment thread (with attribution)."""
+    url = ado_url(
+        org, project, "git", "repositories", repo,
+        "pullrequests", str(pr_id), "threads", str(thread_id), "comments",
+    )
+    result = api_post(url, {"content": comment + CLAUDE_CODE_SIGNATURE, "commentType": 1})
+    click.echo(f"Replied to thread {thread_id}")
     return result
 
-def resolve_thread(org, project, repo, pr_id, thread_id):
-    """Resolve a PR comment thread."""
-    url = f"https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo}/pullrequests/{pr_id}/threads/{thread_id}?api-version=7.1"
-    data = {"status": "fixed"}
-    result = make_request(url, method="PATCH", data=data)
-    print(f"Resolved thread {thread_id}")
+
+def resolve_thread(org: str, project: str, repo: str, pr_id: int, thread_id: int) -> dict:
+    """Mark a thread as resolved."""
+    url = ado_url(
+        org, project, "git", "repositories", repo,
+        "pullrequests", str(pr_id), "threads", str(thread_id),
+    )
+    result = api_patch(url, {"status": "fixed"})
+    click.echo(f"Resolved thread {thread_id}")
     return result
 
-def reply_and_resolve(org, project, repo, pr_id, thread_id, comment):
-    """Reply to and resolve a PR comment thread."""
-    reply_to_thread(org, project, repo, pr_id, thread_id, comment)
-    resolve_thread(org, project, repo, pr_id, thread_id)
 
-def get_pr_details(org, project, repo, pr_id):
-    """Get PR details including title and description."""
-    url = f"https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo}/pullrequests/{pr_id}?api-version=7.1"
-    return make_request(url)
+def get_pr_details(org: str, project: str, repo: str, pr_id: int) -> dict:
+    """Fetch PR metadata."""
+    url = ado_url(org, project, "git", "repositories", repo, "pullrequests", str(pr_id))
+    return api_get(url)
 
-def get_project_id(org, project):
+
+# ---------------------------------------------------------------------------
+# Work-item operations
+# ---------------------------------------------------------------------------
+
+def get_project_id(org: str, project: str) -> str:
     """Get the project GUID."""
-    url = f"https://dev.azure.com/{org}/_apis/projects/{project}?api-version=7.1"
-    result = make_request(url)
-    return result["id"]
+    url = org_url(org, "projects", project)
+    return api_get(url)["id"]
 
-def create_work_item(org, project, work_item_type, title, description, pr_link=None, area_path=None, assigned_to=None, parent_id=None):
-    """Create a work item (Task, Bug, etc.) optionally linked to a PR.
 
-    Args:
-        org: ADO organization
-        project: ADO project name
-        work_item_type: Type of work item (Task, Bug, User Story, Feature, etc.)
-        title: Work item title
-        description: Work item description
-        pr_link: Optional dict with 'project_id', 'repo_id', 'pr_id' to link to a PR
-        area_path: Optional area path (e.g., "OneAgile\\PowerApps\\Developer Agents\\Orchard")
-        assigned_to: Optional user email or display name to assign the work item to
-        parent_id: Optional parent work item ID to create hierarchy
+def create_work_item(
+    org: str, project: str, work_item_type: str, title: str, description: str,
+    *, pr_link: dict | None = None, area_path: str | None = None,
+    assigned_to: str | None = None, parent_id: int | None = None,
+) -> dict:
+    """Create a work item, optionally linked to a PR and/or parent."""
+    encoded_type = quote(work_item_type)
+    url = f"https://dev.azure.com/{org}/{project}/_apis/wit/workitems/${encoded_type}?api-version={API_VERSION}"
 
-    Returns:
-        Created work item dict
-    """
-    from urllib.parse import quote
-    # URL-encode the work item type to handle spaces (e.g., "User Story" -> "User%20Story")
-    work_item_type_encoded = quote(work_item_type)
-    url = f"https://dev.azure.com/{org}/{project}/_apis/wit/workitems/${work_item_type_encoded}?api-version=7.1"
-
-    operations = [
+    ops: list[dict] = [
         {"op": "add", "path": "/fields/System.Title", "value": title},
         {"op": "add", "path": "/fields/System.Description", "value": description},
     ]
-
     if area_path:
-        operations.append({"op": "add", "path": "/fields/System.AreaPath", "value": area_path})
-
+        ops.append({"op": "add", "path": "/fields/System.AreaPath", "value": area_path})
     if assigned_to:
-        operations.append({"op": "add", "path": "/fields/System.AssignedTo", "value": assigned_to})
-
+        ops.append({"op": "add", "path": "/fields/System.AssignedTo", "value": assigned_to})
     if parent_id:
-        # Link to parent work item using System.LinkTypes.Hierarchy-Reverse
-        operations.append({
-            "op": "add",
-            "path": "/relations/-",
+        ops.append({
+            "op": "add", "path": "/relations/-",
             "value": {
                 "rel": "System.LinkTypes.Hierarchy-Reverse",
                 "url": f"https://dev.azure.com/{org}/{project}/_apis/wit/workItems/{parent_id}",
-                "attributes": {"comment": "Parent link"}
-            }
+                "attributes": {"comment": "Parent link"},
+            },
         })
-
     if pr_link:
-        # IMPORTANT: Use %2F (URL-encoded slash) between project_id, repo_id, and pr_id
-        # Regular slashes will NOT work - the PR won't recognize the link
-        artifact_link = f"vstfs:///Git/PullRequestId/{pr_link['project_id']}%2F{pr_link['repo_id']}%2F{pr_link['pr_id']}"
-        operations.append({
-            "op": "add",
-            "path": "/relations/-",
+        artifact = (
+            f"vstfs:///Git/PullRequestId/"
+            f"{pr_link['project_id']}%2F{pr_link['repo_id']}%2F{pr_link['pr_id']}"
+        )
+        ops.append({
+            "op": "add", "path": "/relations/-",
             "value": {
                 "rel": "ArtifactLink",
-                "url": artifact_link,
-                "attributes": {"name": "Pull Request"}
-            }
+                "url": artifact,
+                "attributes": {"name": "Pull Request"},
+            },
         })
 
-    # Work items use JSON Patch format
-    token = get_token()
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json-patch+json"
-    }
-    req = Request(url, method="POST", headers=headers)
-    req.data = json.dumps(operations).encode('utf-8')
+    return api_post(url, ops, content_type="application/json-patch+json")
 
-    try:
-        with urlopen(req) as response:
-            return json.loads(response.read().decode('utf-8'))
-    except HTTPError as e:
-        error_body = e.read().decode('utf-8') if e.fp else str(e)
-        raise RuntimeError(f"HTTP {e.code}: {error_body}")
 
-def get_work_item(org, project, work_item_id):
-    """Get details of a work item by ID."""
-    url = f"https://dev.azure.com/{org}/{project}/_apis/wit/workitems/{work_item_id}?$expand=relations&api-version=7.1"
-    result = make_request(url)
+def update_work_item(org: str, project: str, work_item_id: int, *, title: str | None = None, description: str | None = None) -> dict | None:
+    """Update an existing work item."""
+    ops: list[dict] = []
+    if title:
+        ops.append({"op": "replace", "path": "/fields/System.Title", "value": title})
+    if description:
+        ops.append({"op": "replace", "path": "/fields/System.Description", "value": description})
+    if not ops:
+        click.echo("No updates specified")
+        return None
 
-    fields = result.get("fields", {})
-    print(f"Work Item {work_item_id}")
-    print(f"Type: {fields.get('System.WorkItemType', 'N/A')}")
-    print(f"Title: {fields.get('System.Title', 'N/A')}")
-    print(f"State: {fields.get('System.State', 'N/A')}")
-    print(f"Area Path: {fields.get('System.AreaPath', 'N/A')}")
-    print(f"Assigned To: {fields.get('System.AssignedTo', {}).get('displayName', 'Unassigned')}")
-    print(f"URL: {result['_links']['html']['href']}")
-    print("-" * 80)
-    print("Description:")
-    print(fields.get("System.Description", "No description"))
-
+    url = f"https://dev.azure.com/{org}/{project}/_apis/wit/workitems/{work_item_id}?api-version={API_VERSION}"
+    result = api_patch(url, ops, content_type="application/json-patch+json")
+    click.echo(f"Updated work item {work_item_id}")
+    click.echo(f"URL: {result['_links']['html']['href']}")
     return result
 
 
-def list_child_work_items(org, project, parent_id):
-    """List child work items of a parent."""
-    # Use WIQL to query child work items
-    url = f"https://dev.azure.com/{org}/{project}/_apis/wit/wiql?api-version=7.1"
+def get_work_item(org: str, project: str, work_item_id: int) -> dict:
+    """Fetch and print work item details."""
+    url = ado_url(org, project, "wit", "workitems", str(work_item_id), **{"$expand": "relations"})
+    result = api_get(url)
+
+    f = result.get("fields", {})
+    click.echo(f"Work Item {work_item_id}")
+    click.echo(f"Type: {f.get('System.WorkItemType', 'N/A')}")
+    click.echo(f"Title: {f.get('System.Title', 'N/A')}")
+    click.echo(f"State: {f.get('System.State', 'N/A')}")
+    click.echo(f"Area Path: {f.get('System.AreaPath', 'N/A')}")
+    click.echo(f"Assigned To: {f.get('System.AssignedTo', {}).get('displayName', 'Unassigned')}")
+    click.echo(f"URL: {result['_links']['html']['href']}")
+    click.echo("-" * 80)
+    click.echo("Description:")
+    click.echo(f.get("System.Description", "No description"))
+    return result
+
+
+def _fetch_children(org: str, project: str, parent_id: int) -> list[dict]:
+    """Fetch child work items of a parent (data only, no printing)."""
+    wiql_url = ado_url(org, project, "wit", "wiql")
     wiql = {
-        "query": f"SELECT [System.Id], [System.Title], [System.WorkItemType], [System.State] FROM WorkItemLinks WHERE ([Source].[System.Id] = {parent_id}) AND ([System.Links.LinkType] = 'System.LinkTypes.Hierarchy-Forward') MODE (MustContain)"
+        "query": (
+            f"SELECT [System.Id], [System.Title], [System.WorkItemType], [System.State] "
+            f"FROM WorkItemLinks "
+            f"WHERE ([Source].[System.Id] = {parent_id}) "
+            f"AND ([System.Links.LinkType] = 'System.LinkTypes.Hierarchy-Forward') "
+            f"MODE (MustContain)"
+        )
     }
+    result = api_post(wiql_url, wiql)
 
-    token = get_token()
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
-    req = Request(url, method="POST", headers=headers)
-    req.data = json.dumps(wiql).encode('utf-8')
-
-    try:
-        with urlopen(req) as response:
-            result = json.loads(response.read().decode('utf-8'))
-    except HTTPError as e:
-        error_body = e.read().decode('utf-8') if e.fp else str(e)
-        raise RuntimeError(f"HTTP {e.code}: {error_body}")
-
-    # Get the child work item IDs (target of links)
-    child_ids = [link["target"]["id"] for link in result.get("workItemRelations", []) if link.get("target")]
-
+    child_ids = [
+        link["target"]["id"]
+        for link in result.get("workItemRelations", [])
+        if link.get("target") and link["target"]["id"] != parent_id
+    ]
     if not child_ids:
-        print(f"No child work items found for {parent_id}")
         return []
 
-    # Batch get work item details
-    ids_str = ",".join(str(id) for id in child_ids)
-    details_url = f"https://dev.azure.com/{org}/{project}/_apis/wit/workitems?ids={ids_str}&api-version=7.1"
-    details = make_request(details_url)
-
-    print(f"Child work items of {parent_id}:")
-    print(f"{'ID':<10} {'Type':<15} {'State':<12} Title")
-    print("-" * 80)
-
-    for item in details.get("value", []):
-        fields = item.get("fields", {})
-        print(f"{item['id']:<10} {fields.get('System.WorkItemType', ''):<15} {fields.get('System.State', ''):<12} {fields.get('System.Title', '')}")
-
+    ids_str = ",".join(str(i) for i in child_ids)
+    details_url = ado_url(org, project, "wit", "workitems", ids=ids_str)
+    details = api_get(details_url)
     return details.get("value", [])
 
 
-def create_work_item_cli(org, project, work_item_type, title, description, area_path=None, assigned_to=None, parent_id=None):
-    """CLI wrapper for creating a work item."""
-    result = create_work_item(org, project, work_item_type, title, description,
-                              area_path=area_path, assigned_to=assigned_to, parent_id=parent_id)
-    work_item_id = result["id"]
-    work_item_url = result["_links"]["html"]["href"]
+def list_child_work_items(org: str, project: str, parent_id: int) -> list[dict]:
+    """Query and print child work items of a parent."""
+    items = _fetch_children(org, project, parent_id)
+    if not items:
+        click.echo(f"No child work items found for {parent_id}")
+        return []
 
-    print(f"Created {work_item_type} {work_item_id}")
-    print(f"URL: {work_item_url}")
-    return result
-
-
-def update_work_item(org, project, work_item_id, title=None, description=None):
-    """Update an existing work item's title and/or description."""
-    url = f"https://dev.azure.com/{org}/{project}/_apis/wit/workitems/{work_item_id}?api-version=7.1"
-
-    operations = []
-    if title:
-        operations.append({"op": "replace", "path": "/fields/System.Title", "value": title})
-    if description:
-        operations.append({"op": "replace", "path": "/fields/System.Description", "value": description})
-
-    if not operations:
-        print("No updates specified")
-        return None
-
-    token = get_token()
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json-patch+json"
-    }
-    req = Request(url, method="PATCH", headers=headers)
-    req.data = json.dumps(operations).encode('utf-8')
-
-    try:
-        with urlopen(req) as response:
-            result = json.loads(response.read().decode('utf-8'))
-            print(f"Updated work item {work_item_id}")
-            print(f"URL: {result['_links']['html']['href']}")
-            return result
-    except HTTPError as e:
-        error_body = e.read().decode('utf-8') if e.fp else str(e)
-        raise RuntimeError(f"HTTP {e.code}: {error_body}")
+    click.echo(f"Child work items of {parent_id}:")
+    click.echo(f"{'ID':<10} {'Type':<15} {'State':<12} Title")
+    click.echo("-" * 80)
+    for item in items:
+        f = item.get("fields", {})
+        click.echo(
+            f"{item['id']:<10} {f.get('System.WorkItemType', ''):<15} "
+            f"{f.get('System.State', ''):<12} {f.get('System.Title', '')}"
+        )
+    return items
 
 
-def create_task_for_pr(org, project, repo, pr_id):
-    """Create a Task work item linked to a PR, using PR title/description."""
-    # Get PR details
+def create_task_for_pr(
+    org: str, project: str, repo: str, pr_id: int,
+    *, parent_id: int | None = None, description: str | None = None,
+) -> dict:
+    """Create a Task work item linked to a PR."""
     pr = get_pr_details(org, project, repo, pr_id)
     title = pr.get("title", f"PR {pr_id}")
-    description = pr.get("description", title)
     repo_id = pr.get("repository", {}).get("id")
-
     if not repo_id:
-        raise RuntimeError("Could not get repository ID from PR")
+        raise click.ClickException("Could not get repository ID from PR")
 
-    # Get project ID for artifact link
+    if not description:
+        description = f"Implement and land PR: {title}"
+
     project_id = get_project_id(org, project)
+    pr_link = {"project_id": project_id, "repo_id": repo_id, "pr_id": pr_id}
+    result = create_work_item(org, project, "Task", title, description, pr_link=pr_link, parent_id=parent_id)
 
-    pr_link = {
-        "project_id": project_id,
-        "repo_id": repo_id,
-        "pr_id": pr_id
-    }
-
-    result = create_work_item(org, project, "Task", title, description, pr_link)
-    work_item_id = result["id"]
-    work_item_url = result["_links"]["html"]["href"]
-
-    print(f"Created Task {work_item_id} linked to PR {pr_id}")
-    print(f"URL: {work_item_url}")
+    wi_id = result["id"]
+    wi_url = result["_links"]["html"]["href"]
+    click.echo(f"Created Task {wi_id} linked to PR {pr_id}")
+    click.echo(f"URL: {wi_url}")
     return result
 
-def main():
-    parser = argparse.ArgumentParser(description="Azure DevOps PR helper")
-    parser.add_argument("--org", default="msazure", help="ADO organization")
-    parser.add_argument("--project", default="OneAgile", help="ADO project")
-    parser.add_argument("--repo", default="PowerApps-Orchard", help="Repository name")
-    parser.add_argument("--pr", type=int, help="PR ID (required for PR-related commands)")
 
-    subparsers = parser.add_subparsers(dest="command", required=True)
+# ---------------------------------------------------------------------------
+# CLI (click)
+# ---------------------------------------------------------------------------
 
-    # list-comments
-    subparsers.add_parser("list-comments", help="List active PR comments")
+class AzdoContext:
+    """Holds resolved config + overrides for all subcommands."""
+    def __init__(self, cfg: dict, repo_override: str | None):
+        self.org: str = cfg["organization"]
+        self.project: str = cfg["project"]
+        self.repo: str = repo_override or cfg.get("repository", "")
+        self.cfg = cfg
 
-    # show-thread
-    show_parser = subparsers.add_parser("show-thread", help="Show all comments in a thread")
-    show_parser.add_argument("--thread", type=int, required=True, help="Thread ID")
 
-    # reply
-    reply_parser = subparsers.add_parser("reply", help="Reply to a thread")
-    reply_parser.add_argument("--thread", type=int, required=True, help="Thread ID")
-    reply_parser.add_argument("--comment", required=True, help="Comment text")
+pass_ctx = click.make_pass_decorator(AzdoContext)
 
-    # resolve
-    resolve_parser = subparsers.add_parser("resolve", help="Resolve a thread")
-    resolve_parser.add_argument("--thread", type=int, required=True, help="Thread ID")
 
-    # reply-and-resolve
-    rar_parser = subparsers.add_parser("reply-and-resolve", help="Reply and resolve a thread")
-    rar_parser.add_argument("--thread", type=int, required=True, help="Thread ID")
-    rar_parser.add_argument("--comment", required=True, help="Comment text")
+@click.group()
+@click.option("--config", "config_path", default=None, help="Path to config.json")
+@click.option("--repo", default=None, help="Repository name (overrides config)")
+@click.pass_context
+def cli(ctx, config_path: str | None, repo: str | None):
+    """Azure DevOps PR & work-item helper for Claude Code."""
+    cfg = load_config(config_path)
+    ctx.ensure_object(dict)
+    ctx.obj = AzdoContext(cfg, repo)
 
-    # create-task - create a Task work item linked to the PR
-    subparsers.add_parser("create-task", help="Create a Task work item linked to the PR")
 
-    # create-work-item - create any type of work item with full options
-    wi_parser = subparsers.add_parser("create-work-item", help="Create a work item (Feature, User Story, Task, Bug)")
-    wi_parser.add_argument("--type", required=True, help="Work item type (Feature, User Story, Task, Bug)")
-    wi_parser.add_argument("--title", required=True, help="Work item title")
-    wi_parser.add_argument("--description", required=True, help="Work item description")
-    wi_parser.add_argument("--area-path", help="Area path (e.g., 'OneAgile\\PowerApps\\Developer Agents\\Orchard')")
-    wi_parser.add_argument("--assigned-to", help="User to assign the work item to")
-    wi_parser.add_argument("--parent", type=int, help="Parent work item ID")
+# --- PR commands -----------------------------------------------------------
 
-    # get-work-item - get details of a work item
-    get_wi_parser = subparsers.add_parser("get-work-item", help="Get work item details")
-    get_wi_parser.add_argument("--id", type=int, required=True, help="Work item ID")
+@cli.command("list-comments")
+@click.option("--pr", type=int, required=True, help="PR ID")
+@pass_ctx
+def cmd_list_comments(ctx: AzdoContext, pr: int):
+    """List active PR comment threads."""
+    list_comments(ctx.org, ctx.project, ctx.repo, pr)
 
-    # list-children - list child work items
-    list_children_parser = subparsers.add_parser("list-children", help="List child work items of a parent")
-    list_children_parser.add_argument("--id", type=int, required=True, help="Parent work item ID")
 
-    # update-work-item - update an existing work item
-    update_wi_parser = subparsers.add_parser("update-work-item", help="Update a work item's title or description")
-    update_wi_parser.add_argument("--id", type=int, required=True, help="Work item ID to update")
-    update_wi_parser.add_argument("--title", help="New title")
-    update_wi_parser.add_argument("--description", help="New description")
+@cli.command("show-thread")
+@click.option("--pr", type=int, required=True, help="PR ID")
+@click.option("--thread", type=int, required=True, help="Thread ID")
+@pass_ctx
+def cmd_show_thread(ctx: AzdoContext, pr: int, thread: int):
+    """Show all comments in a thread."""
+    show_thread(ctx.org, ctx.project, ctx.repo, pr, thread)
 
-    args = parser.parse_args()
 
-    # Commands that require --pr
-    pr_required_commands = ["list-comments", "show-thread", "reply", "resolve", "reply-and-resolve", "create-task"]
-    if args.command in pr_required_commands and not args.pr:
-        parser.error(f"--pr is required for {args.command} command")
+@cli.command("reply")
+@click.option("--pr", type=int, required=True, help="PR ID")
+@click.option("--thread", type=int, required=True, help="Thread ID")
+@click.option("--comment", required=True, help="Comment text")
+@pass_ctx
+def cmd_reply(ctx: AzdoContext, pr: int, thread: int, comment: str):
+    """Reply to a PR comment thread."""
+    reply_to_thread(ctx.org, ctx.project, ctx.repo, pr, thread, comment)
 
+
+@cli.command("resolve")
+@click.option("--pr", type=int, required=True, help="PR ID")
+@click.option("--thread", type=int, required=True, help="Thread ID")
+@pass_ctx
+def cmd_resolve(ctx: AzdoContext, pr: int, thread: int):
+    """Resolve a PR comment thread."""
+    resolve_thread(ctx.org, ctx.project, ctx.repo, pr, thread)
+
+
+@cli.command("reply-and-resolve")
+@click.option("--pr", type=int, required=True, help="PR ID")
+@click.option("--thread", type=int, required=True, help="Thread ID")
+@click.option("--comment", required=True, help="Comment text")
+@pass_ctx
+def cmd_reply_and_resolve(ctx: AzdoContext, pr: int, thread: int, comment: str):
+    """Reply to and resolve a thread in one step."""
+    reply_to_thread(ctx.org, ctx.project, ctx.repo, pr, thread, comment)
+    resolve_thread(ctx.org, ctx.project, ctx.repo, pr, thread)
+
+
+@cli.command("create-task")
+@click.option("--pr", type=int, required=True, help="PR ID")
+@click.option("--parent", type=int, default=None, help="Parent work item ID")
+@click.option("--description", default=None, help="Task description")
+@pass_ctx
+def cmd_create_task(ctx: AzdoContext, pr: int, parent: int | None, description: str | None):
+    """Create a Task work item linked to a PR."""
+    create_task_for_pr(ctx.org, ctx.project, ctx.repo, pr, parent_id=parent, description=description)
+
+
+# --- Work-item commands ----------------------------------------------------
+
+@cli.command("create-work-item")
+@click.option("--type", "wi_type", required=True, help="Work item type (Feature, User Story, Task, Bug)")
+@click.option("--title", required=True, help="Title")
+@click.option("--description", required=True, help="Description")
+@click.option("--area-path", default=None, help="Area path")
+@click.option("--assigned-to", default=None, help="Assignee email or display name")
+@click.option("--parent", type=int, default=None, help="Parent work item ID")
+@pass_ctx
+def cmd_create_work_item(ctx: AzdoContext, wi_type: str, title: str, description: str,
+                         area_path: str | None, assigned_to: str | None, parent: int | None):
+    """Create a work item of any type."""
+    area = area_path or ctx.cfg.get("defaultAreaPath")
+    result = create_work_item(
+        ctx.org, ctx.project, wi_type, title, description,
+        area_path=area, assigned_to=assigned_to, parent_id=parent,
+    )
+    click.echo(f"Created {wi_type} {result['id']}")
+    click.echo(f"URL: {result['_links']['html']['href']}")
+
+
+@cli.command("get-work-item")
+@click.option("--id", "wi_id", type=int, required=True, help="Work item ID")
+@pass_ctx
+def cmd_get_work_item(ctx: AzdoContext, wi_id: int):
+    """Get work item details."""
+    get_work_item(ctx.org, ctx.project, wi_id)
+
+
+@cli.command("list-children")
+@click.option("--id", "parent_id", type=int, required=True, help="Parent work item ID")
+@pass_ctx
+def cmd_list_children(ctx: AzdoContext, parent_id: int):
+    """List child work items of a parent."""
+    list_child_work_items(ctx.org, ctx.project, parent_id)
+
+
+@cli.command("update-work-item")
+@click.option("--id", "wi_id", type=int, required=True, help="Work item ID")
+@click.option("--title", default=None, help="New title")
+@click.option("--description", default=None, help="New description")
+@pass_ctx
+def cmd_update_work_item(ctx: AzdoContext, wi_id: int, title: str | None, description: str | None):
+    """Update a work item's title or description."""
+    update_work_item(ctx.org, ctx.project, wi_id, title=title, description=description)
+
+
+# --- Registry commands -----------------------------------------------------
+
+@cli.group("registry")
+def registry_group():
+    """Feature registry — manage tracked ADO features."""
+
+
+@registry_group.command("list")
+@pass_ctx
+def cmd_registry_list(ctx: AzdoContext):
+    """List all registered features."""
+    registry = _get_registry(ctx.cfg)
+    default_name = ctx.cfg.get("defaultFeature", "")
+    if not registry:
+        click.echo("No features registered.")
+        return
+    click.echo(f"{'Name':<20} {'ID':<12} {'Added':<14} Description")
+    click.echo("-" * 80)
+    for name, entry in sorted(registry.items()):
+        marker = " *" if name == default_name else ""
+        click.echo(
+            f"{name + marker:<20} {entry['id']:<12} "
+            f"{entry.get('added_at', 'N/A'):<14} {entry.get('description', '')}"
+        )
+    if default_name:
+        click.echo(f"\n* = default feature ({default_name})")
+
+
+@registry_group.command("add")
+@click.option("--name", required=True, help="Short name for the feature")
+@click.option("--id", "ado_id", type=int, required=True, help="ADO work item ID")
+@click.option("--description", "desc", default="", help="Description")
+@pass_ctx
+def cmd_registry_add(ctx: AzdoContext, name: str, ado_id: int, desc: str):
+    """Add a feature to the registry."""
+    registry = _get_registry(ctx.cfg)
+    if name in registry:
+        raise click.ClickException(f"Feature '{name}' already exists. Remove it first.")
+    registry[name] = {
+        "id": ado_id,
+        "description": desc,
+        "added_at": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+    }
+    ctx.cfg["features"] = registry
+    ctx.cfg.pop("backlogFeatureId", None)
+    if "defaultFeature" not in ctx.cfg:
+        ctx.cfg["defaultFeature"] = name
+    _save_config(ctx.cfg)
+    click.echo(f"Added feature '{name}' (ID {ado_id})")
+
+
+@registry_group.command("remove")
+@click.option("--name", required=True, help="Feature name to remove")
+@pass_ctx
+def cmd_registry_remove(ctx: AzdoContext, name: str):
+    """Remove a feature from the registry."""
+    registry = _get_registry(ctx.cfg)
+    if name not in registry:
+        raise click.ClickException(f"Feature '{name}' not found.")
+    if ctx.cfg.get("defaultFeature") == name:
+        raise click.ClickException(
+            f"'{name}' is the default feature. Use `registry set-default` to change it first."
+        )
+    del registry[name]
+    ctx.cfg["features"] = registry
+    ctx.cfg.pop("backlogFeatureId", None)
+    _save_config(ctx.cfg)
+    click.echo(f"Removed feature '{name}'")
+
+
+@registry_group.command("set-default")
+@click.option("--name", required=True, help="Feature name to set as default")
+@pass_ctx
+def cmd_registry_set_default(ctx: AzdoContext, name: str):
+    """Set the default feature."""
+    registry = _get_registry(ctx.cfg)
+    if name not in registry:
+        raise click.ClickException(f"Feature '{name}' not found in registry.")
+    ctx.cfg["features"] = registry
+    ctx.cfg["defaultFeature"] = name
+    ctx.cfg.pop("backlogFeatureId", None)
+    _save_config(ctx.cfg)
+    click.echo(f"Default feature set to '{name}'")
+
+
+@registry_group.command("status")
+@pass_ctx
+def cmd_registry_status(ctx: AzdoContext):
+    """Fetch live ADO data for each registered feature."""
+    registry = _get_registry(ctx.cfg)
+    if not registry:
+        click.echo("No features registered.")
+        return
+    for name, entry in sorted(registry.items()):
+        ado_id = entry["id"]
+        click.echo(f"\n{'=' * 60}")
+        click.echo(f"Feature: {name} (ID {ado_id})")
+        click.echo(f"{'=' * 60}")
+        try:
+            wi = _fetch_work_item(ctx.org, ctx.project, ado_id)
+        except Exception as e:
+            click.echo(f"  ERROR fetching: {e}")
+            continue
+        f = wi.get("fields", {})
+        click.echo(f"  Title:    {f.get('System.Title', 'N/A')}")
+        click.echo(f"  State:    {f.get('System.State', 'N/A')}")
+        click.echo(f"  Created:  {f.get('System.CreatedDate', 'N/A')}")
+        click.echo(f"  Changed:  {f.get('System.ChangedDate', 'N/A')}")
+        # Fetch children for counts
+        children = _fetch_children(ctx.org, ctx.project, ado_id)
+        if children:
+            counts: dict[str, int] = {}
+            for item in children:
+                wit = item.get("fields", {}).get("System.WorkItemType", "Unknown")
+                counts[wit] = counts.get(wit, 0) + 1
+            click.echo(f"  Children: {len(children)} total — " +
+                        ", ".join(f"{c} {t}" for t, c in sorted(counts.items())))
+        else:
+            click.echo("  Children: 0")
+
+
+# --- Marshal command -------------------------------------------------------
+
+@cli.command("marshal-feature")
+@click.option("--feature", required=True, help="Feature name (from registry) or ADO ID")
+@pass_ctx
+def cmd_marshal_feature(ctx: AzdoContext, feature: str):
+    """Recursively fetch a feature's work item tree and write YAML IR."""
+    name, entry = _resolve_feature(ctx.cfg, feature)
+    ado_id = entry["id"]
+
+    click.echo(f"Marshaling feature '{name}' (ID {ado_id})...")
+
+    # Fetch the root feature work item
+    root_wi = _fetch_work_item(ctx.org, ctx.project, ado_id)
+
+    _LEAF_TYPES = {"Task", "Bug"}
+    _item_count = 0
+
+    def _build_node(wi: dict, depth: int = 0) -> dict:
+        nonlocal _item_count
+        _item_count += 1
+        f = wi.get("fields", {})
+        wi_type = f.get("System.WorkItemType", "Unknown")
+        title = f.get("System.Title", "")
+        click.echo(f"  {'  ' * depth}{wi_type} #{wi['id']}: {title}")
+        node: dict = {
+            "id": wi["id"],
+            "type": wi_type,
+            "title": title,
+            "state": f.get("System.State", "Unknown"),
+        }
+        if wi_type not in _LEAF_TYPES:
+            children = _fetch_children(ctx.org, ctx.project, wi["id"])
+            if children:
+                node["children"] = [_build_node(child, depth + 1) for child in children]
+        return node
+
+    root_node = _build_node(root_wi)
+
+    ir = {
+        "source": "ado",
+        "marshaled_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "feature": root_node,
+    }
+
+    # Write to ir/ directory
+    ir_dir = Path(__file__).parent / "ir"
+    ir_dir.mkdir(exist_ok=True)
+    ir_path = ir_dir / f"feature-{ado_id}.yaml"
+    with open(ir_path, "w", encoding="utf-8") as f:
+        yaml.dump(ir, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
+    # Print summary
+    def _count_items(node: dict, counts: dict[str, dict[str, int]] | None = None) -> dict[str, dict[str, int]]:
+        if counts is None:
+            counts = {}
+        wt = node.get("type", "Unknown")
+        state = node.get("state", "Unknown")
+        if wt not in counts:
+            counts[wt] = {}
+        counts[wt][state] = counts[wt].get(state, 0) + 1
+        for child in node.get("children", []):
+            _count_items(child, counts)
+        return counts
+
+    def _total(node: dict) -> int:
+        return 1 + sum(_total(c) for c in node.get("children", []))
+
+    total = _total(root_node)
+    counts = _count_items(root_node)
+
+    click.echo(f"\nWrote {ir_path}")
+    click.echo(f"Feature: {root_node['title']}")
+    click.echo(f"Total items: {total}")
+    for wt, states in sorted(counts.items()):
+        state_str = ", ".join(f"{s}: {n}" for s, n in sorted(states.items()))
+        click.echo(f"  {wt}: {sum(states.values())} ({state_str})")
+
+
+# --- Duckrow command -------------------------------------------------------
+
+def _flatten_tree(node: dict, depth: int = 0) -> list[dict]:
+    """Flatten a nested IR tree into a list with depth info (skips the root feature)."""
+    items = []
+    if depth > 0:  # skip the feature root itself
+        items.append({**node, "_depth": depth})
+    for child in node.get("children", []):
+        items.extend(_flatten_tree(child, depth + 1))
+    return items
+
+
+def _format_item_line(item: dict, width: int = 120) -> str:
+    """Format a work item as a single truncated line for fzf/display."""
+    indent = "  " * (item.get("_depth", 1) - 1)
+    prefix = f"{item['id']:<10} {item.get('type', ''):<13} {item.get('state', ''):<8}"
+    title_budget = width - len(prefix) - len(indent)
+    title = item.get("title", "")
+    if len(title) > title_budget:
+        title = title[: title_budget - 3] + "..."
+    return f"{prefix}{indent}{title}"
+
+
+def _fzf_multiselect(lines: list[str], prompt: str = "Select> ") -> list[str]:
+    """Pipe lines through fzf -m and return selected lines."""
+    fzf_path = shutil.which("fzf")
+    if not fzf_path:
+        raise click.ClickException("fzf not found on PATH. Install via scoop: scoop install fzf")
+    proc = subprocess.run(
+        [fzf_path, "-m", "--prompt", prompt, "--height", "40%", "--reverse"],
+        input="\n".join(lines),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        return []  # user cancelled
+    return [line for line in proc.stdout.strip().splitlines() if line]
+
+
+@cli.command("duckrow")
+@click.option("-f", "filter_features", is_flag=True, default=False,
+              help="Pre-filter features via fzf multiselect")
+@pass_ctx
+def cmd_duckrow(ctx: AzdoContext, filter_features: bool):
+    """List all work items under registered features. Use -f to pick features interactively."""
+    registry = _get_registry(ctx.cfg)
+    if not registry:
+        raise click.ClickException("No features registered.")
+
+    # Determine which features to include
+    if filter_features:
+        feature_lines = [
+            f"{name:<20} {entry['id']:<10} {entry.get('description', '')}"
+            for name, entry in sorted(registry.items())
+        ]
+        selected = _fzf_multiselect(feature_lines, prompt="Features> ")
+        if not selected:
+            click.echo("No features selected.")
+            return
+        selected_names = {line.split()[0] for line in selected}
+        registry = {k: v for k, v in registry.items() if k in selected_names}
+
+    # Collect items from all selected features
+    all_items: list[dict] = []
+    for name, entry in sorted(registry.items()):
+        ado_id = entry["id"]
+        ir_path = Path(__file__).parent / "ir" / f"feature-{ado_id}.yaml"
+        if ir_path.exists():
+            with open(ir_path, encoding="utf-8") as f:
+                ir = yaml.safe_load(f)
+            root = ir.get("feature", {})
+            click.echo(f"[{name}] {root.get('title', f'Feature {ado_id}')} (from IR)")
+        else:
+            click.echo(f"[{name}] Fetching feature {ado_id} from ADO...")
+            root_wi = _fetch_work_item(ctx.org, ctx.project, ado_id)
+            # Build tree inline
+            _LEAF_TYPES = {"Task", "Bug"}
+
+            def _build(wi: dict) -> dict:
+                fld = wi.get("fields", {})
+                wi_type = fld.get("System.WorkItemType", "Unknown")
+                nd = {
+                    "id": wi["id"],
+                    "type": wi_type,
+                    "title": fld.get("System.Title", ""),
+                    "state": fld.get("System.State", "Unknown"),
+                }
+                if wi_type not in _LEAF_TYPES:
+                    children = _fetch_children(ctx.org, ctx.project, wi["id"])
+                    if children:
+                        nd["children"] = [_build(c) for c in children]
+                return nd
+
+            root = _build(root_wi)
+
+        items = _flatten_tree(root)
+        all_items.extend(items)
+
+    if not all_items:
+        click.echo("No work items found.")
+        return
+
+    # Print one line per item
     try:
-        if args.command == "list-comments":
-            list_comments(args.org, args.project, args.repo, args.pr)
-        elif args.command == "show-thread":
-            show_thread(args.org, args.project, args.repo, args.pr, args.thread)
-        elif args.command == "reply":
-            reply_to_thread(args.org, args.project, args.repo, args.pr, args.thread, args.comment)
-        elif args.command == "resolve":
-            resolve_thread(args.org, args.project, args.repo, args.pr, args.thread)
-        elif args.command == "reply-and-resolve":
-            reply_and_resolve(args.org, args.project, args.repo, args.pr, args.thread, args.comment)
-        elif args.command == "create-task":
-            create_task_for_pr(args.org, args.project, args.repo, args.pr)
-        elif args.command == "create-work-item":
-            create_work_item_cli(args.org, args.project, args.type, args.title, args.description,
-                                 area_path=args.area_path, assigned_to=args.assigned_to, parent_id=args.parent)
-        elif args.command == "get-work-item":
-            get_work_item(args.org, args.project, args.id)
-        elif args.command == "list-children":
-            list_child_work_items(args.org, args.project, args.id)
-        elif args.command == "update-work-item":
-            update_work_item(args.org, args.project, args.id, title=args.title, description=args.description)
-    except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
+        width = os.get_terminal_size().columns
+    except OSError:
+        width = 120
+    for item in all_items:
+        click.echo(_format_item_line(item, width))
+
+
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    main()
+    cli()
