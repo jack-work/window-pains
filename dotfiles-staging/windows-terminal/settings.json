@@ -1,44 +1,85 @@
 {
     "$help": "https://aka.ms/terminal-documentation",
     "$schema": "https://aka.ms/terminal-profiles-schema",
-    "actions": [],
+    "actions":
+    [
+        { "command": { "action": "scrollUp", "rowsToScroll": 3 }, "id": "User.ScrollUp" },
+        { "command": { "action": "scrollDown", "rowsToScroll": 3 }, "id": "User.ScrollDown" },
+        { "command": { "action": "scrollUp", "rowsToScroll": 15 }, "id": "User.ScrollHalfUp" },
+        { "command": { "action": "scrollDown", "rowsToScroll": 15 }, "id": "User.ScrollHalfDown" },
+        { "command": { "action": "moveTab", "direction": "backward" }, "id": "User.MoveTabBack" },
+        { "command": { "action": "moveTab", "direction": "forward" }, "id": "User.MoveTabForward" }
+    ],
     "copyFormatting": "none",
     "copyOnSelect": false,
     "defaultProfile": "{574e775e-4f2a-5b96-ac1e-a2962a402336}",
-    "keybindings": 
+    "keybindings":
     [
-        {
-            "id": "Terminal.CopyToClipboard",
-            "keys": "ctrl+c"
-        },
-        {
-            "id": "Terminal.PasteFromClipboard",
-            "keys": "ctrl+v"
-        },
-        {
-            "id": "Terminal.FindText",
-            "keys": "ctrl+shift+f"
-        },
-        {
-            "id": "Terminal.MoveFocusDown",
-            "keys": "ctrl+down"
-        },
-        {
-            "id": "Terminal.DuplicatePaneAuto",
-            "keys": "alt+shift+d"
-        },
-        {
-            "id": "Terminal.MoveFocusRight",
-            "keys": "ctrl+right"
-        },
-        {
-            "id": "Terminal.MoveFocusLeft",
-            "keys": "ctrl+left"
-        },
-        {
-            "id": "Terminal.MoveFocusUp",
-            "keys": "ctrl+up"
-        }
+        { "keys": "ctrl+c", "id": "Terminal.CopyToClipboard" },
+        { "keys": "ctrl+v", "id": "Terminal.PasteFromClipboard" },
+        { "keys": "ctrl+shift+f", "id": "Terminal.FindText" },
+
+        { "keys": "ctrl+h", "id": "Terminal.MoveFocusLeft" },
+        { "keys": "ctrl+j", "id": "Terminal.MoveFocusDown" },
+        { "keys": "ctrl+k", "id": "Terminal.MoveFocusUp" },
+        { "keys": "ctrl+l", "id": "Terminal.MoveFocusRight" },
+
+        { "keys": "alt+h", "id": "Terminal.ResizePaneLeft" },
+        { "keys": "alt+j", "id": "Terminal.ResizePaneDown" },
+        { "keys": "alt+k", "id": "Terminal.ResizePaneUp" },
+        { "keys": "alt+l", "id": "Terminal.ResizePaneRight" },
+
+        { "keys": "alt+-", "id": "Terminal.DuplicatePaneDown" },
+        { "keys": "alt+\\", "id": "Terminal.DuplicatePaneRight" },
+
+        { "keys": "alt+shift+h", "id": "Terminal.SwapPaneLeft" },
+        { "keys": "alt+shift+j", "id": "Terminal.SwapPaneDown" },
+        { "keys": "alt+shift+k", "id": "Terminal.SwapPaneUp" },
+        { "keys": "alt+shift+l", "id": "Terminal.SwapPaneRight" },
+
+        { "keys": "alt+z", "id": "Terminal.TogglePaneZoom" },
+        { "keys": "alt+x", "id": "Terminal.ClosePane" },
+        { "keys": "alt+;", "id": "Terminal.MoveFocusPrevious" },
+
+        { "keys": "ctrl+shift+k", "id": "User.ScrollUp" },
+        { "keys": "ctrl+shift+j", "id": "User.ScrollDown" },
+        { "keys": "ctrl+shift+u", "id": "User.ScrollHalfUp" },
+        { "keys": "ctrl+shift+d", "id": "User.ScrollHalfDown" },
+        { "keys": "ctrl+shift+home", "id": "Terminal.ScrollToTop" },
+        { "keys": "ctrl+shift+end", "id": "Terminal.ScrollToBottom" },
+
+        { "keys": "alt+n", "id": "Terminal.NextTab" },
+        { "keys": "alt+p", "id": "Terminal.PrevTab" },
+        { "keys": "ctrl+alt+1", "id": "Terminal.SwitchToTab0" },
+        { "keys": "ctrl+alt+2", "id": "Terminal.SwitchToTab1" },
+        { "keys": "ctrl+alt+3", "id": "Terminal.SwitchToTab2" },
+        { "keys": "ctrl+alt+4", "id": "Terminal.SwitchToTab3" },
+        { "keys": "ctrl+alt+5", "id": "Terminal.SwitchToTab4" },
+        { "keys": "ctrl+alt+6", "id": "Terminal.SwitchToTab5" },
+        { "keys": "ctrl+alt+7", "id": "Terminal.SwitchToTab6" },
+        { "keys": "ctrl+alt+8", "id": "Terminal.SwitchToTab7" },
+        { "keys": "ctrl+shift+alt+h", "id": "User.MoveTabBack" },
+        { "keys": "ctrl+shift+alt+l", "id": "User.MoveTabForward" },
+
+        { "keys": "ctrl+shift+m", "id": "Terminal.ToggleMarkMode" },
+        { "keys": "ctrl+shift+b", "id": "Terminal.ToggleBlockSelection" },
+        { "keys": "ctrl+shift+p", "id": "Terminal.ToggleCommandPalette" },
+
+        { "keys": "ctrl+left", "id": null },
+        { "keys": "ctrl+right", "id": null },
+        { "keys": "ctrl+up", "id": null },
+        { "keys": "ctrl+down", "id": null },
+        { "keys": "alt+shift+d", "id": null },
+        { "keys": "alt+shift+-", "id": null },
+        { "keys": "alt+shift+plus", "id": null },
+        { "keys": "alt+up", "id": null },
+        { "keys": "alt+down", "id": null },
+        { "keys": "alt+left", "id": null },
+        { "keys": "alt+right", "id": null },
+        { "keys": "alt+shift+up", "id": null },
+        { "keys": "alt+shift+down", "id": null },
+        { "keys": "alt+shift+left", "id": null },
+        { "keys": "alt+shift+right", "id": null }
     ],
     "newTabMenu": 
     [
@@ -51,9 +92,14 @@
         "defaults": 
         {
             "colorScheme": "Dark+",
-            "font": 
+            "font":
             {
-                "face": "FiraCode Nerd Font"
+                "face": "FiraCode Nerd Font",
+                "features":
+                {
+                    "liga": 0,
+                    "calt": 0
+                }
             },
             "opacity": 93
         },
