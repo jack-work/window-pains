@@ -19,7 +19,16 @@ require("lazy").setup("plugins")
 
 require('mason').setup()
 require("mason-lspconfig").setup({
-  ensure_installed = { "powershell_es" }
+  ensure_installed = { "powershell_es" },
+  handlers = {
+    -- Default: auto-setup any Mason-installed server via lspconfig
+    function(server_name)
+      require('lspconfig')[server_name].setup({})
+    end,
+    -- typescript-tools.nvim handles TypeScript — skip these to avoid duplicates
+    ts_ls = function() end,
+    tsgo = function() end,
+  },
 })
 
 require('lspconfig').powershell_es.setup {
@@ -182,10 +191,15 @@ end, {})
 
 vim.api.nvim_create_autocmd("TermOpen", {
   callback = function()
-    vim.opt_local.number = true
-    vim.opt_local.relativenumber = true
+    vim.opt_local.number = false
+    vim.opt_local.relativenumber = false
+    vim.opt_local.signcolumn = "no"
+    vim.opt_local.foldcolumn = "0"
   end,
 })
+
+vim.env.COLORTERM = "truecolor"
+vim.o.ambiwidth = "single"
 
 -- OSC 7: capture terminal cwd reported by shell prompt
 -- Shell sends: ESC]7;file://hostname/path ESC\
@@ -264,129 +278,3 @@ vim.keymap.set("n", "<leader>guid", ":GenGuid<CR>")
 
 -- Initialize random seed (put this outside the command)
 math.randomseed(os.time() + os.clock() * 1000)
-
--- Runs the nearest Get-Token.ps1 ancestor script
--- Also contains an implementation of updating file buffer that can probably be generalized.
-vim.keymap.set("n", "<leader>Tt", function()
-  -- Get the directory of the current buffer
-  local current_file = vim.api.nvim_buf_get_name(0)
-  local current_dir = vim.fn.fnamemodify(current_file, ':p:h')
-
-  -- Search for Get-Token.ps1 in ancestor directories
-  local script_file = vim.fn.findfile('Get-Token.ps1', current_dir .. ';')
-
-  if script_file == '' then
-    vim.notify("Get-Token.ps1 not found in ancestor directories", vim.log.levels.ERROR)
-    return
-  end
-
-  -- Get the absolute path and directory of the script
-  local script_path = vim.fn.fnamemodify(script_file, ':p')
-  local script_dir = vim.fn.fnamemodify(script_file, ':p:h')
-
-  -- Create a new buffer for output
-  local buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_name(buf, 'Get-Token Output')
-
-  -- Set buffer options
-  vim.api.nvim_buf_set_option(buf, 'buftype', 'nofile')
-  vim.api.nvim_buf_set_option(buf, 'bufhidden', 'wipe')
-  vim.api.nvim_buf_set_option(buf, 'filetype', 'powershell')
-  vim.api.nvim_buf_set_option(buf, 'fileformat', 'unix')
-
-  -- Open the buffer in a split
-  vim.cmd('split')
-  vim.api.nvim_win_set_buf(0, buf)
-
-  -- Add initial message
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
-    "Running: pwsh -File " .. script_path,
-    "Working Directory: " .. script_dir,
-    string.rep("-", 80),
-    ""
-  })
-
-  local line_count = 4
-
-  -- Helper function to strip carriage returns
-  local function strip_cr(lines)
-    return vim.tbl_map(function(line)
-      return line:gsub('\r', '')
-    end, lines)
-  end
-
-  -- Run the script using pwsh
-  local cmd = string.format('pwsh -File "%s"', script_path)
-
-  vim.fn.jobstart(cmd, {
-    cwd = script_dir, -- Set working directory to script's directory
-    on_stdout = function(_, data)
-      if data then
-        -- Filter out empty strings and strip CR
-        local lines = vim.tbl_filter(function(line)
-          return line ~= ''
-        end, strip_cr(data))
-
-        if #lines > 0 then
-          vim.api.nvim_buf_set_lines(buf, line_count, line_count, false, lines)
-          line_count = line_count + #lines
-
-          -- Auto-scroll to bottom
-          local wins = vim.fn.win_findbuf(buf)
-          for _, win in ipairs(wins) do
-            vim.api.nvim_win_set_cursor(win, { line_count, 0 })
-          end
-        end
-      end
-    end,
-    on_stderr = function(_, data)
-      if data then
-        local lines = vim.tbl_filter(function(line)
-          return line ~= ''
-        end, strip_cr(data))
-
-        if #lines > 0 then
-          -- Prefix error lines with [ERROR]
-          local error_lines = vim.tbl_map(function(line)
-            return "[ERROR] " .. line
-          end, lines)
-
-          vim.api.nvim_buf_set_lines(buf, line_count, line_count, false, error_lines)
-          line_count = line_count + #error_lines
-
-          -- Auto-scroll to bottom
-          local wins = vim.fn.win_findbuf(buf)
-          for _, win in ipairs(wins) do
-            vim.api.nvim_win_set_cursor(win, { line_count, 0 })
-          end
-        end
-      end
-    end,
-    on_exit = function(_, exit_code)
-      local status_lines = {
-        "",
-        string.rep("-", 80),
-      }
-
-      if exit_code == 0 then
-        table.insert(status_lines, "✓ Process completed successfully (exit code: 0)")
-      else
-        table.insert(status_lines, "✗ Process failed (exit code: " .. exit_code .. ")")
-      end
-
-      vim.api.nvim_buf_set_lines(buf, line_count, line_count, false, status_lines)
-      line_count = line_count + #status_lines
-
-      -- Make buffer read-only after completion
-      vim.api.nvim_buf_set_option(buf, 'modifiable', false)
-
-      -- Auto-scroll to bottom
-      local wins = vim.fn.win_findbuf(buf)
-      for _, win in ipairs(wins) do
-        vim.api.nvim_win_set_cursor(win, { line_count, 0 })
-      end
-    end,
-    stdout_buffered = false,
-    stderr_buffered = false,
-  })
-end)
