@@ -2,6 +2,10 @@
   "organization": "msazure",
   "project": "OneAgile",
   "repository": "PowerApps-Orchard",
+  "repositories": {
+    "orchard": "PowerApps-Orchard",
+    "ppux": "power-platform-ux"
+  },
   "defaultAreaPath": "OneAgile\\PowerApps\\Developer Agents\\Orchard",
   "features": {
     "backlog": {

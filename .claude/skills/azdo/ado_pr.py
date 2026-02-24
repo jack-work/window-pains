@@ -502,8 +502,19 @@ class AzdoContext:
     def __init__(self, cfg: dict, repo_override: str | None):
         self.org: str = cfg["organization"]
         self.project: str = cfg["project"]
-        self.repo: str = repo_override or cfg.get("repository", "")
+        self._aliases: dict[str, str] = cfg.get("repositories", {})
+        self.repo: str = self._resolve_alias(repo_override or cfg.get("repository", ""))
         self.cfg = cfg
+
+    def _resolve_alias(self, name: str) -> str:
+        """Resolve a repo alias to its full name, or return as-is."""
+        return self._aliases.get(name, name)
+
+    def effective_repo(self, cmd_override: str | None = None) -> str:
+        """Return the repo to use, with command-level override taking priority."""
+        if cmd_override:
+            return self._resolve_alias(cmd_override)
+        return self.repo
 
 
 pass_ctx = click.make_pass_decorator(AzdoContext)
@@ -523,60 +534,67 @@ def cli(ctx, config_path: str | None, repo: str | None):
 # --- PR commands -----------------------------------------------------------
 
 @cli.command("list-comments")
+@click.option("--repo", "cmd_repo", default=None, help="Repository name or alias (overrides config)")
 @click.option("--pr", type=int, required=True, help="PR ID")
 @pass_ctx
-def cmd_list_comments(ctx: AzdoContext, pr: int):
+def cmd_list_comments(ctx: AzdoContext, cmd_repo: str | None, pr: int):
     """List active PR comment threads."""
-    list_comments(ctx.org, ctx.project, ctx.repo, pr)
+    list_comments(ctx.org, ctx.project, ctx.effective_repo(cmd_repo), pr)
 
 
 @cli.command("show-thread")
+@click.option("--repo", "cmd_repo", default=None, help="Repository name or alias (overrides config)")
 @click.option("--pr", type=int, required=True, help="PR ID")
 @click.option("--thread", type=int, required=True, help="Thread ID")
 @pass_ctx
-def cmd_show_thread(ctx: AzdoContext, pr: int, thread: int):
+def cmd_show_thread(ctx: AzdoContext, cmd_repo: str | None, pr: int, thread: int):
     """Show all comments in a thread."""
-    show_thread(ctx.org, ctx.project, ctx.repo, pr, thread)
+    show_thread(ctx.org, ctx.project, ctx.effective_repo(cmd_repo), pr, thread)
 
 
 @cli.command("reply")
+@click.option("--repo", "cmd_repo", default=None, help="Repository name or alias (overrides config)")
 @click.option("--pr", type=int, required=True, help="PR ID")
 @click.option("--thread", type=int, required=True, help="Thread ID")
 @click.option("--comment", required=True, help="Comment text")
 @pass_ctx
-def cmd_reply(ctx: AzdoContext, pr: int, thread: int, comment: str):
+def cmd_reply(ctx: AzdoContext, cmd_repo: str | None, pr: int, thread: int, comment: str):
     """Reply to a PR comment thread."""
-    reply_to_thread(ctx.org, ctx.project, ctx.repo, pr, thread, comment)
+    reply_to_thread(ctx.org, ctx.project, ctx.effective_repo(cmd_repo), pr, thread, comment)
 
 
 @cli.command("resolve")
+@click.option("--repo", "cmd_repo", default=None, help="Repository name or alias (overrides config)")
 @click.option("--pr", type=int, required=True, help="PR ID")
 @click.option("--thread", type=int, required=True, help="Thread ID")
 @pass_ctx
-def cmd_resolve(ctx: AzdoContext, pr: int, thread: int):
+def cmd_resolve(ctx: AzdoContext, cmd_repo: str | None, pr: int, thread: int):
     """Resolve a PR comment thread."""
-    resolve_thread(ctx.org, ctx.project, ctx.repo, pr, thread)
+    resolve_thread(ctx.org, ctx.project, ctx.effective_repo(cmd_repo), pr, thread)
 
 
 @cli.command("reply-and-resolve")
+@click.option("--repo", "cmd_repo", default=None, help="Repository name or alias (overrides config)")
 @click.option("--pr", type=int, required=True, help="PR ID")
 @click.option("--thread", type=int, required=True, help="Thread ID")
 @click.option("--comment", required=True, help="Comment text")
 @pass_ctx
-def cmd_reply_and_resolve(ctx: AzdoContext, pr: int, thread: int, comment: str):
+def cmd_reply_and_resolve(ctx: AzdoContext, cmd_repo: str | None, pr: int, thread: int, comment: str):
     """Reply to and resolve a thread in one step."""
-    reply_to_thread(ctx.org, ctx.project, ctx.repo, pr, thread, comment)
-    resolve_thread(ctx.org, ctx.project, ctx.repo, pr, thread)
+    repo = ctx.effective_repo(cmd_repo)
+    reply_to_thread(ctx.org, ctx.project, repo, pr, thread, comment)
+    resolve_thread(ctx.org, ctx.project, repo, pr, thread)
 
 
 @cli.command("create-task")
+@click.option("--repo", "cmd_repo", default=None, help="Repository name or alias (overrides config)")
 @click.option("--pr", type=int, required=True, help="PR ID")
 @click.option("--parent", type=int, default=None, help="Parent work item ID")
 @click.option("--description", default=None, help="Task description")
 @pass_ctx
-def cmd_create_task(ctx: AzdoContext, pr: int, parent: int | None, description: str | None):
+def cmd_create_task(ctx: AzdoContext, cmd_repo: str | None, pr: int, parent: int | None, description: str | None):
     """Create a Task work item linked to a PR."""
-    create_task_for_pr(ctx.org, ctx.project, ctx.repo, pr, parent_id=parent, description=description)
+    create_task_for_pr(ctx.org, ctx.project, ctx.effective_repo(cmd_repo), pr, parent_id=parent, description=description)
 
 
 # --- Work-item commands ----------------------------------------------------
@@ -929,13 +947,56 @@ def cmd_duckrow(ctx: AzdoContext, filter_features: bool):
         click.echo("No work items found.")
         return
 
-    # Print one line per item
+    # Format lines for fzf selection
     try:
         width = os.get_terminal_size().columns
     except OSError:
         width = 120
-    for item in all_items:
-        click.echo(_format_item_line(item, width))
+    item_lines = [_format_item_line(item, width) for item in all_items]
+
+    # Let user pick work items via fzf multi-select
+    selected_lines = _fzf_multiselect(item_lines, prompt="Work items> ")
+    if not selected_lines:
+        click.echo("No work items selected.")
+        return
+
+    click.echo(f"\n{len(selected_lines)} work item(s) selected:")
+    for line in selected_lines:
+        click.echo(f"  {line}")
+
+    # Ask user what they want to do with the selected items
+    click.echo()
+    user_prompt = click.prompt("What would you like to do with these work items?")
+    if not user_prompt.strip():
+        click.echo("No action specified.")
+        return
+
+    # Build the full prompt for Claude
+    items_block = "\n".join(selected_lines)
+    full_prompt = (
+        f"Use the /azdo skill to work with the following Azure DevOps work items.\n"
+        f"\n"
+        f"Work items:\n"
+        f"```\n{items_block}\n```\n"
+        f"\n"
+        f"The ID is the first column of each line. The type is the second column. "
+        f"The state is the third column. The rest is the title.\n"
+        f"\n"
+        f"User request: {user_prompt}\n"
+        f"\n"
+        f"Use the /azdo skill's edit-item, move-item, and other commands as needed "
+        f"to accomplish the user's request. Work through the items methodically."
+    )
+
+    # Spawn Claude with --dangerously-skip-permissions
+    claude_path = shutil.which("claude")
+    if not claude_path:
+        raise click.ClickException("claude CLI not found on PATH.")
+
+    click.echo(f"\nLaunching Claude to handle your request...")
+    subprocess.run(
+        [claude_path, "--dangerously-skip-permissions", "-p", full_prompt],
+    )
 
 
 # ---------------------------------------------------------------------------
