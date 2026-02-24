@@ -1,7 +1,17 @@
+# ── Environment & PATH (order matters) ────────────────────────────────────────
+
 # mise: put shims first so mise-managed tools (bun, node, etc.) win over scoop/system
 $env:PATH = "$env:LOCALAPPDATA\mise\shims;$env:PATH"
 
-# PowerShell profile - OPTIMIZED FOR FAST STARTUP
+# Go bin: go install targets (angl, etc.)
+$env:PATH = "$HOME\go\bin;$env:PATH"
+
+# Ensure Claude Code / Node.js uses truecolor output in all terminals
+$env:COLORTERM = "truecolor"
+$env:FORCE_COLOR = "3"
+
+# ── Profile bootstrap ────────────────────────────────────────────────────────
+# OPTIMIZED FOR FAST STARTUP
 # Modules are stored locally at ~\.local\share\powershell\Modules
 # OneDrive\Documents\PowerShell\Modules is an NTFS junction pointing there (bypasses OneDrive sync)
 
@@ -40,7 +50,108 @@ $null = Register-EngineEvent -SourceIdentifier PowerShell.OnIdle -MaxTriggerCoun
     }
 }
 
-# Utilities
+# ── Neovim / editor ──────────────────────────────────────────────────────────
+
+function clod
+{ nvim +term '+call chansend(&channel, "claude --dangerously-skip-permissions\r")'
+}
+function vimrc
+{ vim "$env:VIMRC"
+}
+$env:NOTES = Get-Date -Format "yyyy-MM-dd" | ForEach-Object { "$env:USERPROFILE\Notes\$_.md" }
+function nn
+{ vim $env:NOTES
+}
+function Update-Profile
+{ vim $PROFILE && . $PROFILE
+}
+
+# ── Fuzzy file openers ───────────────────────────────────────────────────────
+
+function of
+{ fzf | ForEach-Object { vim $_ }
+}
+function tof
+{ fzf --with-nth='..' | ForEach-Object { vimt $_ }
+}
+function bof
+{ fzf | ForEach-Object { vimb $_ }
+}
+
+# ── Git shortcuts ─────────────────────────────────────────────────────────────
+
+function gat
+{ git status
+}
+function branchname
+{ git rev-parse --abbrev-ref HEAD
+}
+function mb
+{ git symbolic-ref refs/remotes/origin/HEAD | Split-Path -Leaf
+}
+function gandalf
+{ git add -A "$(git rev-parse --show-toplevel)"
+}
+function pub
+{ git rev-parse --abbrev-ref HEAD | ForEach-Object { git push -u --no-verify origin $_ }
+}
+function may4
+{ git push -f --no-verify
+}
+# Stage all changes, amend the last commit without edit, force push to remote without verification
+function whoops
+{ git add -A "$(git rev-parse --show-toplevel)" && git commit --amend --no-edit --no-verify && git push -f --no-verify
+}
+# Amend last commit with staged changes without edit or verification and force push to origin
+function oops
+{ git commit --amend --no-edit --no-verify && git push -f --no-verify
+}
+function yeesh
+{ git commit -p --amend --no-verify --no-edit
+}
+function bless
+{ git stash --include-untracked && git checkout (mb) && git pull origin (mb) && git checkout - && git rebase (mb)
+}
+function fresh
+{ git stash --include-untracked && git checkout master && git pull origin master
+}
+
+# ── PowerApps-Client build & dev ─────────────────────────────────────────────
+
+$env:PAC = "C:\Users\jokellih\src\PowerApps-Client"
+function pacode
+{ code $env:PAC
+}
+function pac1
+{ Set-Location "C:\Users\jokellih\src\PowerApps-Client"
+}
+function bw
+{ .\build.cmd -web
+}
+function bj
+{ .\build.cmd -js
+}
+function bt
+{ .\build.cmd -jstest
+}
+function rt ($argument)
+{ .\testrun.cmd $argument
+}
+function tr
+{ & ./testrun.cmd @args
+}
+function swa
+{ .\startWebAuth.cmd -nowatch -noReactDevTools
+}
+function swal
+{ .\startWebAuth.cmd -nowatch -noReactDevTools -launchDebugger
+}
+function pmc
+{ Remove-Item -R -Force ../bin, ../obj
+}
+
+# ── General utilities ─────────────────────────────────────────────────────────
+
 function Add-TimeToDate
 {
   param(
@@ -69,29 +180,29 @@ function Add-TimeToDate
     Get-Date
   }
 
-  $secondsToAdd = ($TimeArgs | ForEach-Object { 
+  $secondsToAdd = ($TimeArgs | ForEach-Object {
       $value = [int]($_ -replace '[smhdMy]$', '')
       $unit = $_ -replace '^\d+', ''
       $value * $(switch ($unit)
-        { 
+        {
           's'
           {1
-          } 
+          }
           'm'
           {60
-          } 
+          }
           'h'
           {3600
-          } 
+          }
           'd'
           {86400
-          } 
+          }
           'M'
           {2592000
-          } 
+          }
           'y'
           {31536000
-          } 
+          }
           default
           {0
           }
@@ -109,116 +220,18 @@ function Add-TimeToDate
   }
 }
 
-# Utils
-function of
-{ fzf | ForEach-Object { vim $_ }
-}
-
-function tof
-{ fzf --with-nth='..' | ForEach-Object { vimt $_ }
-}
-
-function bof
-{ fzf | ForEach-Object { vimb $_ }
-}
-
-# MSFT specific init
-# aliases
-$env:PAC = "C:\Users\jokellih\src\PowerApps-Client"
-function pacode
-{ code $env:PAC 
-}
-
-$env:NOTES = Get-Date -Format "yyyy-MM-dd" | ForEach-Object { "$env:USERPROFILE\Notes\$_.md" }
-function nn
-{ vim $env:NOTES 
-}
-
-function pac1
-{ Set-Location "C:\Users\jokellih\src\PowerApps-Client" 
-}
-
-# Open profile for edit in vim
-function Update-Profile
-{ vim $PROFILE && . $PROFILE 
-}
-
-# Git
-
-# Stage all changes, ammend the last commit without edit, force push to remote without verification
-function whoops
-{ git add -A "$(git rev-parse --show-toplevel)" && git commit --amend --no-edit --no-verify && git push -f --no-verify 
-} 
-function gandalf
-{ git add -A "$(git rev-parse --show-toplevel)" 
-}
-function branchname
-{ git rev-parse --abbrev-ref HEAD 
-}
-
-# Amend last commmit with staged changes without edit or verification and force push to origin
-function oops
-{ git commit --amend --no-edit --no-verify && git push -f --no-verify 
-}
-
-function bw
-{ .\build.cmd -web 
-}
-function bj
-{ .\build.cmd -js 
-}
-function bt
-{ .\build.cmd -jstest 
-}
-function mb
-{ git symbolic-ref refs/remotes/origin/HEAD | Split-Path -Leaf
-}
-function bless
-{ git stash --include-untracked && git checkout (mb) && git pull origin (mb) && git checkout - && git rebase (mb)
-}
-function swa
-{ .\startWebAuth.cmd -nowatch -noReactDevTools 
-}
-function swal
-{ .\startWebAuth.cmd -nowatch -noReactDevTools -launchDebugger 
-}
-function rt ($argument)
-{ .\testrun.cmd $argument 
-}
-function pub
-{ git rev-parse --abbrev-ref HEAD | ForEach-Object { git push -u --no-verify origin $_ } 
-}
-function may4
-{ git push -f --no-verify 
-}
-function yeesh
-{ git commit -p --amend --no-verify --no-edit 
-}
-function fresh
-{ git stash --include-untracked && git checkout master && git pull origin master 
-}
-function gat
-{ git status 
-}
-function vimrc
-{ vim "$env:VIMRC" 
-}
 function appendToFile($fileName, $appendText)
-{ Get-Content "$fileName" | ForEach-Object { $_ += "`r`n$appendText" } 
+{ Get-Content "$fileName" | ForEach-Object { $_ += "`r`n$appendText" }
 }
 function copyPath
-{ (Get-Location).Path | clip 
+{ (Get-Location).Path | clip
 }
-function pmc
-{ Remove-Item -R -Force ../bin, ../obj 
-}
-function tr
-{ & ./testrun.cmd @args 
-}
+
+# ── Auth & tokens ─────────────────────────────────────────────────────────────
+
 # merc function moved to Merc module (~\.local\share\powershell\Modules\Merc)
 # if you read this later and forget why you wrote it just remove it.  It's for getting an orchard token and obv locked down to an app.
 function apple
 {
   Get-ChildItem -Path "Cert:\LocalMachine\My" | Where-Object { $_.Subject -match "local.forserviceauthuseonly.pacore.client" } | Select-Object -First 1 | ForEach-Object { Get-MsalToken -ClientId  "3013d8ae-e44f-40bd-9383-66d940b99f2f" -TenantId "975f013f-7f24-47e8-a7d3-abc4752bf346" -ClientCertificate $_ -Scopes "3013d8ae-e44f-40bd-9383-66d940b99f2f/.default" -SendX5C } | Select-Object -ExpandProperty AccessToken
 }
-
