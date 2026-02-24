@@ -26,7 +26,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python C:/Users/jokellih/.claude/hooks/event-logger.py"
+            "command": "python3 C:/Users/jokellih/.claude/hooks/event-logger.py"
           }
         ]
       }
@@ -36,7 +36,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python C:/Users/jokellih/.claude/hooks/event-logger.py"
+            "command": "python3 C:/Users/jokellih/.claude/hooks/event-logger.py"
           }
         ]
       }
@@ -46,7 +46,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python C:/Users/jokellih/.claude/hooks/event-logger.py"
+            "command": "python3 C:/Users/jokellih/.claude/hooks/event-logger.py"
           }
         ]
       }
@@ -57,7 +57,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python C:/Users/jokellih/.claude/hooks/event-logger.py"
+            "command": "python3 C:/Users/jokellih/.claude/hooks/event-logger.py"
           }
         ]
       }
@@ -68,7 +68,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python C:/Users/jokellih/.claude/hooks/event-logger.py"
+            "command": "python3 C:/Users/jokellih/.claude/hooks/event-logger.py"
           }
         ]
       }
@@ -78,7 +78,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python C:/Users/jokellih/.claude/hooks/event-logger.py"
+            "command": "python3 C:/Users/jokellih/.claude/hooks/event-logger.py"
           }
         ]
       }
@@ -90,5 +90,6 @@
     "ralph-loop@claude-plugins-official": false,
     "github@claude-plugins-official": true
   },
-  "forceLoginMethod": "console"
+  "forceLoginMethod": "console",
+  "skipDangerousModePermissionPrompt": true
 }
