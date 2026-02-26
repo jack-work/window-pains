@@ -94,6 +94,14 @@ The CLI reads `config.json` automatically. Options like `--repo` override config
 - `--project <name>` — ADO project (overrides config)
 - `--repo <name>` — Repository name (overrides config)
 
+## Future Work
+
+When working on this skill, prefer reducing complexity and improving functionality over adding abstraction layers. The skill should be robust but lightweight.
+
+- **Native PR creation**: Add a `create-pr` command that wraps `az repos pr create` with sensible defaults from config and passthrough for remaining args. Currently PR creation is done via raw `az` CLI because the skill lacked cross-project support. The `--org`/`--project` overrides now exist, so this is unblocked.
+- **Reduce wrapper layers**: The CLI should stay thin. Where `az` CLI already does the job well, prefer passthrough with defaults over reimplementing. Only wrap when adding real value (e.g., artifact linking, work item creation alongside PR).
+- **Agent guidance**: Future agents modifying this skill should check `git log --oneline` on the skill files to understand evolution. When choosing between a simple approach and a complex one, bias toward simple. Every commit should either reduce complexity or improve functionality — not both at once unless they're naturally coupled.
+
 ## API Reference
 
 - [Pull Requests API](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/pull-requests)
