@@ -494,14 +494,52 @@ def create_task_for_pr(
 
 
 # ---------------------------------------------------------------------------
+# Pipeline operations
+# ---------------------------------------------------------------------------
+
+def queue_pipeline(
+    org: str, project: str, pipeline_id: int, branch: str,
+    *, parameters: dict[str, str] | None = None,
+) -> dict:
+    """Queue a pipeline run on a given branch with optional template parameters."""
+    url = ado_url(org, project, "pipelines", str(pipeline_id), "runs")
+    body: dict = {
+        "resources": {
+            "repositories": {
+                "self": {
+                    "refName": f"refs/heads/{branch}",
+                }
+            }
+        },
+    }
+    if parameters:
+        body["templateParameters"] = parameters
+
+    result = api_post(url, body)
+    run_id = result.get("id")
+    run_name = result.get("name", "N/A")
+    state = result.get("state", "unknown")
+    pipeline_name = result.get("pipeline", {}).get("name", f"Pipeline {pipeline_id}")
+    run_url = f"https://dev.azure.com/{org}/{project}/_build/results?buildId={run_id}"
+    click.echo(f"Queued {pipeline_name} run #{run_name} (ID {run_id})")
+    click.echo(f"State: {state}")
+    click.echo(f"Branch: {branch}")
+    if parameters:
+        click.echo(f"Parameters: {parameters}")
+    click.echo(f"URL: {run_url}")
+    return result
+
+
+# ---------------------------------------------------------------------------
 # CLI (click)
 # ---------------------------------------------------------------------------
 
 class AzdoContext:
     """Holds resolved config + overrides for all subcommands."""
-    def __init__(self, cfg: dict, repo_override: str | None):
-        self.org: str = cfg["organization"]
-        self.project: str = cfg["project"]
+    def __init__(self, cfg: dict, repo_override: str | None,
+                 org_override: str | None = None, project_override: str | None = None):
+        self.org: str = org_override or cfg["organization"]
+        self.project: str = project_override or cfg["project"]
         self._aliases: dict[str, str] = cfg.get("repositories", {})
         self.repo: str = self._resolve_alias(repo_override or cfg.get("repository", ""))
         self.cfg = cfg
@@ -522,13 +560,15 @@ pass_ctx = click.make_pass_decorator(AzdoContext)
 
 @click.group()
 @click.option("--config", "config_path", default=None, help="Path to config.json")
+@click.option("--org", default=None, help="ADO organization (overrides config)")
+@click.option("--project", default=None, help="ADO project (overrides config)")
 @click.option("--repo", default=None, help="Repository name (overrides config)")
 @click.pass_context
-def cli(ctx, config_path: str | None, repo: str | None):
+def cli(ctx, config_path: str | None, org: str | None, project: str | None, repo: str | None):
     """Azure DevOps PR & work-item helper for Claude Code."""
     cfg = load_config(config_path)
     ctx.ensure_object(dict)
-    ctx.obj = AzdoContext(cfg, repo)
+    ctx.obj = AzdoContext(cfg, repo, org_override=org, project_override=project)
 
 
 # --- PR commands -----------------------------------------------------------
@@ -643,6 +683,25 @@ def cmd_list_children(ctx: AzdoContext, parent_id: int):
 def cmd_update_work_item(ctx: AzdoContext, wi_id: int, title: str | None, description: str | None):
     """Update a work item's title or description."""
     update_work_item(ctx.org, ctx.project, wi_id, title=title, description=description)
+
+
+# --- Pipeline commands -----------------------------------------------------
+
+@cli.command("queue-pipeline")
+@click.option("--id", "pipeline_id", type=int, required=True, help="Pipeline definition ID")
+@click.option("--branch", required=True, help="Branch name (e.g. users/me/feature)")
+@click.option("--parameters", "params", multiple=True,
+              help="Template parameters as name=value (repeatable)")
+@pass_ctx
+def cmd_queue_pipeline(ctx: AzdoContext, pipeline_id: int, branch: str, params: tuple[str, ...]):
+    """Queue (run) a pipeline on a specific branch."""
+    parsed: dict[str, str] = {}
+    for p in params:
+        if "=" not in p:
+            raise click.ClickException(f"Invalid parameter format '{p}' — expected name=value")
+        k, v = p.split("=", 1)
+        parsed[k] = v
+    queue_pipeline(ctx.org, ctx.project, pipeline_id, branch, parameters=parsed or None)
 
 
 # --- Registry commands -----------------------------------------------------

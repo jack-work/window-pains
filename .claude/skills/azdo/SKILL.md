@@ -74,6 +74,12 @@ The CLI reads `config.json` automatically. Options like `--repo` override config
 | `registry set-default` | `--name` | Set the default feature |
 | `registry status` | | Fetch live ADO data for each feature |
 
+### Pipeline Commands
+
+| Command | Options | Description |
+|---------|---------|-------------|
+| `queue-pipeline` | `--id --branch [--parameters name=value ...]` | Queue a pipeline run on a branch |
+
 ### Marshal & Duckrow Commands
 
 | Command | Options | Description |
@@ -84,6 +90,8 @@ The CLI reads `config.json` automatically. Options like `--repo` override config
 ### Common Options
 
 - `--config <path>` — Override config.json location
+- `--org <name>` — ADO organization (overrides config)
+- `--project <name>` — ADO project (overrides config)
 - `--repo <name>` — Repository name (overrides config)
 
 ## API Reference
@@ -91,3 +99,4 @@ The CLI reads `config.json` automatically. Options like `--repo` override config
 - [Pull Requests API](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/pull-requests)
 - [Pull Request Threads API](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/pull-request-threads)
 - [Work Items API](https://learn.microsoft.com/en-us/rest/api/azure/devops/wit/work-items/create)
+- [Pipelines API](https://learn.microsoft.com/en-us/rest/api/azure/devops/pipelines/runs/run-pipeline)
